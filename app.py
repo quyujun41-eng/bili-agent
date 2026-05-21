@@ -1,6 +1,7 @@
-from flask import Flask, render_template, request, jsonify
+import json
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 import config
-from agents import sql_agent
+from agents import sql_agent_stream
 
 app = Flask(__name__)
 
@@ -16,27 +17,23 @@ def ask():
     if not question:
         return jsonify({'error': '请输入问题'}), 400
 
-    try:
-        result = sql_agent(question)
-    except Exception as e:
-        return jsonify({'error': f"Agent 异常：{e}", 'sql': ''})
+    def generate():
+        try:
+            for chunk in sql_agent_stream(question):
+                yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
-    if result['status'] == 'error':
-        return jsonify({'error': f"查询失败：{result['error']}", 'sql': result.get('sql', '')})
-
-    return jsonify({
-        'answer': result['answer'],
-        'sql': result['sql'],
-        'columns': result['columns'],
-        'rows': result['rows'],
-        'total': result['total'],
-        'chart': result['chart'],
-    })
+    return Response(
+        stream_with_context(generate()),
+        content_type='text/event-stream',
+        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'}
+    )
 
 
 @app.errorhandler(Exception)
 def handle_exception(e):
-    return jsonify({'error': str(e), 'sql': ''}), 500
+    return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
