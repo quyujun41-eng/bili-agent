@@ -69,31 +69,31 @@ def _extract_json(text: str) -> dict:
     return json.loads(raw)
 
 
+SYSTEM = (
+    "你是「B站数据AI分析助手」。"
+    "后端已连接真实 SQLite 数据库，你只需生成 SQL 文本，Python 自动执行。"
+    "普通聊天用中文简短回答。"
+)
+
+# 精简版 schema，只保留列名
+SCHEMA_SHORT = (
+    "表名 HuiZong，列：id,作者,标题,简介,链接,播放量,弹幕量,收藏量,"
+    "点赞,评论,转发,投币,粉丝数,时长(秒),分区,投稿时间,data_year(年份)"
+)
+
+
 def _route_and_sql(question: str) -> dict:
-    """第一次调用：判断是否需要查数据库，若需要则同时生成 SQL"""
-    system = (
-        "你是「B站数据AI分析助手」，一个部署在服务器上的智能助手。"
-        "你的后端已经连接了真实的 SQLite 数据库，你只需要输出 SQL 语句，"
-        "Python 程序会自动执行并把结果返回给用户。"
-        "你不需要自己执行任何查询，只需生成正确的 SQL 文本即可。"
-        "对于普通聊天，用中文友好回答。"
-    )
-    prompt = f"""{SCHEMA}
-
-用户说：{question}
-
-判断用户意图并输出 JSON：
-- 如果用户在问 B站数据相关问题（需要查数据库），输出：
-  {{"type": "sql", "sql": "SELECT ..."}}
-- 如果是普通聊天、闲聊、问你是谁、问其他知识等，输出：
-  {{"type": "chat", "answer": "你的中文回答"}}
-
-只输出 JSON，不要其他内容。"""
+    """第一次调用：路由 + SQL + 预判图表规格（全部合并，压缩 token）"""
+    prompt = f"""{SCHEMA_SHORT}
+用户：{question}
+输出 JSON（只输出 JSON）：
+数据库问题→{{"type":"sql","sql":"SELECT...","chart":{{"type":"bar/line/pie","x_col":"列名","y_col":"列名","title":"标题"}} 或 null}}
+普通聊天→{{"type":"chat","answer":"中文回答"}}"""
 
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=512,
-        system=system,
+        max_tokens=200,
+        system=SYSTEM,
         messages=[{'role': 'user', 'content': prompt}]
     )
     try:
@@ -134,42 +134,24 @@ def _build_chart_option(chart_spec: dict, cols: list, rows: list) -> dict | None
     }
 
 
-def _interpret_and_chart(question: str, cols: list, rows: list) -> dict:
-    """第二次调用（仅数据库问题）：解读结果 + 给出图表规格"""
-    preview = [dict(zip(cols, r)) for r in rows[:20]]
-    prompt = f"""用户问：{question}
-查询列名：{cols}
-数据（前{len(preview)}条/共{len(rows)}条）：{json.dumps(preview, ensure_ascii=False)}
-
-请输出一个 JSON：
-{{
-  "answer": "用1~3句中文回答用户问题，要有具体数字",
-  "chart": {{
-    "type": "bar 或 line 或 pie",
-    "title": "图表标题",
-    "x_col": "X轴用哪列（必须是列名原文）",
-    "y_col": "Y轴用哪列（必须是列名原文）"
-  }} 或 null（若不适合图表）
-}}
-只输出 JSON。"""
-
+def _interpret(question: str, cols: list, rows: list) -> str:
+    """第二次调用：只做一件事——用 1-2 句话解读查询结果"""
+    preview = [dict(zip(cols, r)) for r in rows[:10]]
+    prompt = (f"用户问：{question}\n列名：{cols}\n"
+              f"数据（前{len(preview)}条/共{len(rows)}条）：{json.dumps(preview, ensure_ascii=False)}\n"
+              "用1-2句中文回答，带具体数字，不要废话。")
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=512,
+        max_tokens=150,
+        system=SYSTEM,
         messages=[{'role': 'user', 'content': prompt}]
     )
-    try:
-        result = _extract_json(resp.content[0].text.strip())
-        chart_option = _build_chart_option(result.get('chart'), cols, rows)
-        return {'answer': result.get('answer', ''), 'chart_option': chart_option}
-    except Exception:
-        return {'answer': resp.content[0].text.strip(), 'chart_option': None}
+    return resp.content[0].text.strip()
 
 
 def sql_agent(question: str) -> dict:
     routed = _route_and_sql(question)
 
-    # 普通聊天，直接返回
     if routed.get('type') == 'chat':
         return {
             'status': 'ok',
@@ -182,7 +164,6 @@ def sql_agent(question: str) -> dict:
             'chart': {'should_chart': False},
         }
 
-    # 数据库查询
     sql = routed.get('sql', '')
     if not sql:
         return {'status': 'error', 'error': '无法生成 SQL', 'sql': ''}
@@ -197,9 +178,10 @@ def sql_agent(question: str) -> dict:
             if attempt == 0:
                 fix_resp = client.messages.create(
                     model=MODEL,
-                    max_tokens=256,
+                    max_tokens=150,
+                    system=SYSTEM,
                     messages=[{'role': 'user', 'content':
-                        f"SQL报错：{error}\nSQL：{sql}\n{SCHEMA}\n修正SQL，只输出SQL语句。"}]
+                        f"SQL报错：{error}\nSQL：{sql}\n{SCHEMA_SHORT}\n只输出修正后的SQL语句。"}]
                 )
                 sql = _extract_sql(fix_resp.content[0].text)
 
@@ -207,20 +189,20 @@ def sql_agent(question: str) -> dict:
         return {'status': 'error', 'error': error, 'sql': sql}
 
     if not rows:
-        result = {'answer': '数据库中没有符合条件的数据。', 'chart_option': None}
+        answer = '数据库中没有符合条件的数据。'
+        chart = {'should_chart': False}
     else:
-        result = _interpret_and_chart(question, cols, rows)
-
-    chart_option = result.get('chart_option')
-    chart = {'should_chart': bool(chart_option), 'option': chart_option} if chart_option else {'should_chart': False}
+        answer = _interpret(question, cols, rows)
+        chart_option = _build_chart_option(routed.get('chart'), cols, rows)
+        chart = {'should_chart': bool(chart_option), 'option': chart_option} if chart_option else {'should_chart': False}
 
     return {
         'status': 'ok',
         'mode': 'sql',
         'sql': sql,
         'columns': cols,
-        'rows': rows[:50],
-        'total': len(rows),
-        'answer': result.get('answer', ''),
+        'rows': rows[:50] if rows else [],
+        'total': len(rows) if rows else 0,
+        'answer': answer,
         'chart': chart,
     }
