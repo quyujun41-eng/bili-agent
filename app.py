@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 import config
-from agents import sql_agent, chart_agent
+from agents import sql_agent
 
 app = Flask(__name__)
 
@@ -24,18 +24,13 @@ def ask():
     if result['status'] == 'error':
         return jsonify({'error': f"查询失败：{result['error']}", 'sql': result.get('sql', '')})
 
-    try:
-        chart = chart_agent(question, result['columns'], result['rows'])
-    except Exception:
-        chart = {'should_chart': False}
-
     return jsonify({
         'answer': result['answer'],
         'sql': result['sql'],
         'columns': result['columns'],
         'rows': result['rows'],
         'total': result['total'],
-        'chart': chart,
+        'chart': result['chart'],
     })
 
 

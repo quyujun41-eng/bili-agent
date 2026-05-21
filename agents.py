@@ -9,7 +9,7 @@ client = anthropic.Anthropic(
     base_url=config.ANTHROPIC_BASE_URL,
 )
 
-MODEL = 'claude-sonnet-4-6'
+MODEL = 'claude-haiku-4-5-20251001'
 
 SCHEMA = """
 数据库：SQLite，表名：HuiZong（B站视频数据）
@@ -62,30 +62,66 @@ def _extract_sql(text: str) -> str:
     return text.strip()
 
 
-def sql_agent(question: str) -> dict:
-    """Agent 1：自然语言 → SQL → 执行 → 自然语言解读"""
-    sql_prompt = f"""{SCHEMA}
+def _extract_json(text: str) -> dict:
+    m = re.search(r'```json\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
+    raw = m.group(1) if m else text
+    raw = re.sub(r'//.*', '', raw)
+    return json.loads(raw)
+
+
+# 第一次调用：生成 SQL
+def _get_sql(question: str) -> str:
+    prompt = f"""{SCHEMA}
 
 用户问题：{question}
 
 只输出一个 JSON，格式：
-{{"sql": "SELECT ...", "explanation": "我在查什么"}}
+{{"sql": "SELECT ..."}}
 不要输出其他任何内容。"""
 
     resp = client.messages.create(
         model=MODEL,
         max_tokens=512,
-        messages=[{'role': 'user', 'content': sql_prompt}]
+        messages=[{'role': 'user', 'content': prompt}]
     )
     raw = resp.content[0].text.strip()
-
     try:
-        parsed = json.loads(raw)
-        sql = parsed['sql']
-        explanation = parsed.get('explanation', '')
+        return json.loads(raw)['sql']
     except Exception:
-        sql = _extract_sql(raw)
-        explanation = ''
+        return _extract_sql(raw)
+
+
+# 第二次调用：解读结果 + 生成图表配置（合并为一次）
+def _interpret_and_chart(question: str, cols: list, rows: list) -> dict:
+    preview = [dict(zip(cols, r)) for r in rows[:20]]
+    prompt = f"""用户问：{question}
+查询列名：{cols}
+数据（前{len(preview)}条/共{len(rows)}条）：{json.dumps(preview, ensure_ascii=False)}
+
+请输出一个 JSON，包含两个字段：
+1. "answer": 用1~3句自然语言回答用户问题，要有具体数字
+2. "chart": 若数据适合图表（柱状图/折线图/饼图），输出标准 ECharts option 对象；若不适合则输出 null
+
+格式：
+{{
+  "answer": "...",
+  "chart": {{ECharts option}} 或 null
+}}
+只输出 JSON，不要其他内容。"""
+
+    resp = client.messages.create(
+        model=MODEL,
+        max_tokens=1024,
+        messages=[{'role': 'user', 'content': prompt}]
+    )
+    try:
+        return _extract_json(resp.content[0].text.strip())
+    except Exception:
+        return {'answer': resp.content[0].text.strip(), 'chart': None}
+
+
+def sql_agent(question: str) -> dict:
+    sql = _get_sql(question)
 
     cols, rows, error = None, None, None
     for attempt in range(2):
@@ -107,90 +143,19 @@ def sql_agent(question: str) -> dict:
         return {'status': 'error', 'error': error, 'sql': sql}
 
     if not rows:
-        answer = '数据库中没有符合条件的数据。'
+        result = {'answer': '数据库中没有符合条件的数据。', 'chart': None}
     else:
-        preview = rows[:10]
-        interp_resp = client.messages.create(
-            model=MODEL,
-            max_tokens=300,
-            messages=[{'role': 'user', 'content':
-                f"用户问：{question}\n查询结果列名：{cols}\n数据（前{len(preview)}条/共{len(rows)}条）：{preview}\n"
-                f"用1~3句自然语言回答，要有具体数字，不要照抄原始数据。"}]
-        )
-        answer = interp_resp.content[0].text.strip()
+        result = _interpret_and_chart(question, cols, rows)
+
+    chart_option = result.get('chart')
+    chart = {'should_chart': bool(chart_option), 'option': chart_option} if chart_option else {'should_chart': False}
 
     return {
         'status': 'ok',
         'sql': sql,
-        'explanation': explanation,
         'columns': cols,
         'rows': rows[:50],
         'total': len(rows),
-        'answer': answer,
+        'answer': result.get('answer', ''),
+        'chart': chart,
     }
-
-
-def chart_agent(question: str, columns: list, rows: list) -> dict:
-    """Agent 2：根据查询结果决定是否画图，并生成 ECharts 配置"""
-    if not rows or not columns:
-        return {'should_chart': False}
-
-    data_preview = [dict(zip(columns, r)) for r in rows[:20]]
-
-    chart_prompt = f"""用户问题：{question}
-查询结果列名：{columns}
-数据示例（前{len(data_preview)}条）：{json.dumps(data_preview, ensure_ascii=False)}
-
-判断是否适合用图表展示（柱状图/折线图/饼图）。
-若适合，输出 JSON：
-{{
-  "should_chart": true,
-  "chart_type": "bar/line/pie",
-  "title": "图表标题",
-  "x_col": "用哪列做X轴或饼图label（列名原文）",
-  "y_col": "用哪列做Y轴或饼图value（列名原文）"
-}}
-若不适合（纯文本结果、只有1行等），输出：
-{{"should_chart": false}}
-只输出 JSON，不要其他内容。"""
-
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=256,
-        messages=[{'role': 'user', 'content': chart_prompt}]
-    )
-    try:
-        spec = json.loads(resp.content[0].text.strip())
-    except Exception:
-        return {'should_chart': False}
-
-    if not spec.get('should_chart'):
-        return {'should_chart': False}
-
-    x_col = spec.get('x_col', columns[0])
-    y_col = spec.get('y_col', columns[-1])
-    chart_type = spec.get('chart_type', 'bar')
-    title = spec.get('title', question[:20])
-
-    x_data = [str(r[columns.index(x_col)]) if x_col in columns else '' for r in rows[:20]]
-    y_data = [r[columns.index(y_col)] if y_col in columns else 0 for r in rows[:20]]
-
-    if chart_type == 'pie':
-        option = {
-            'title': {'text': title, 'left': 'center'},
-            'tooltip': {'trigger': 'item'},
-            'series': [{'type': 'pie', 'radius': '60%',
-                        'data': [{'name': x, 'value': y} for x, y in zip(x_data, y_data)]}]
-        }
-    else:
-        option = {
-            'title': {'text': title},
-            'tooltip': {'trigger': 'axis'},
-            'grid': {'bottom': '20%'},
-            'xAxis': {'type': 'category', 'data': x_data, 'axisLabel': {'rotate': 30}},
-            'yAxis': {'type': 'value'},
-            'series': [{'type': chart_type, 'data': y_data,
-                        'itemStyle': {'color': '#4a90e2'}}]
-        }
-
-    return {'should_chart': True, 'chart_type': chart_type, 'option': option}

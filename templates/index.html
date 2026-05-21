@@ -110,7 +110,8 @@ function sendQ() {
     })
     .then(function(r) { return r.json(); })
     .then(function(data) {
-        document.getElementById(thinkId).parentElement.parentElement.remove();
+        var el = document.getElementById(thinkId);
+        if (el) el.parentElement.remove();
         if (data.error) {
             appendMsg('bot', '<div class="bubble" style="color:#e85d5d;">' + escHtml(data.error) + '</div>');
         } else {
@@ -119,7 +120,7 @@ function sendQ() {
     })
     .catch(function() {
         var el = document.getElementById(thinkId);
-        if (el) el.parentElement.parentElement.remove();
+        if (el) el.parentElement.remove();
         appendMsg('bot', '<div class="bubble" style="color:#e85d5d;">请求失败，请重试</div>');
     })
     .finally(function() { btn.disabled = false; });
