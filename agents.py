@@ -102,8 +102,40 @@ def _route_and_sql(question: str) -> dict:
         return {'type': 'chat', 'answer': resp.content[0].text.strip()}
 
 
+def _build_chart_option(chart_spec: dict, cols: list, rows: list) -> dict | None:
+    """根据 Claude 给的图表规格，用真实数据在 Python 侧组装 ECharts option"""
+    if not chart_spec:
+        return None
+    chart_type = chart_spec.get('type', 'bar')
+    x_col = chart_spec.get('x_col')
+    y_col = chart_spec.get('y_col')
+    title = chart_spec.get('title', '')
+    if x_col not in cols or y_col not in cols:
+        return None
+    xi = cols.index(x_col)
+    yi = cols.index(y_col)
+    x_data = [str(r[xi]) for r in rows[:20]]
+    y_data = [round(float(r[yi]), 2) if r[yi] is not None else 0 for r in rows[:20]]
+    if chart_type == 'pie':
+        return {
+            'title': {'text': title, 'left': 'center'},
+            'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
+            'series': [{'type': 'pie', 'radius': '60%',
+                        'data': [{'name': x, 'value': y} for x, y in zip(x_data, y_data)]}]
+        }
+    return {
+        'title': {'text': title},
+        'tooltip': {'trigger': 'axis'},
+        'grid': {'bottom': '20%'},
+        'xAxis': {'type': 'category', 'data': x_data, 'axisLabel': {'rotate': 30}},
+        'yAxis': {'type': 'value'},
+        'series': [{'type': chart_type, 'data': y_data,
+                    'itemStyle': {'color': '#4a90e2'}}]
+    }
+
+
 def _interpret_and_chart(question: str, cols: list, rows: list) -> dict:
-    """第二次调用（仅数据库问题）：解读结果 + 生成图表配置"""
+    """第二次调用（仅数据库问题）：解读结果 + 给出图表规格"""
     preview = [dict(zip(cols, r)) for r in rows[:20]]
     prompt = f"""用户问：{question}
 查询列名：{cols}
@@ -111,20 +143,27 @@ def _interpret_and_chart(question: str, cols: list, rows: list) -> dict:
 
 请输出一个 JSON：
 {{
-  "answer": "用1~3句自然语言回答用户问题，要有具体数字",
-  "chart": {{标准 ECharts option 对象}} 或 null（若不适合图表）
+  "answer": "用1~3句中文回答用户问题，要有具体数字",
+  "chart": {{
+    "type": "bar 或 line 或 pie",
+    "title": "图表标题",
+    "x_col": "X轴用哪列（必须是列名原文）",
+    "y_col": "Y轴用哪列（必须是列名原文）"
+  }} 或 null（若不适合图表）
 }}
 只输出 JSON。"""
 
     resp = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=512,
         messages=[{'role': 'user', 'content': prompt}]
     )
     try:
-        return _extract_json(resp.content[0].text.strip())
+        result = _extract_json(resp.content[0].text.strip())
+        chart_option = _build_chart_option(result.get('chart'), cols, rows)
+        return {'answer': result.get('answer', ''), 'chart_option': chart_option}
     except Exception:
-        return {'answer': resp.content[0].text.strip(), 'chart': None}
+        return {'answer': resp.content[0].text.strip(), 'chart_option': None}
 
 
 def sql_agent(question: str) -> dict:
@@ -168,11 +207,11 @@ def sql_agent(question: str) -> dict:
         return {'status': 'error', 'error': error, 'sql': sql}
 
     if not rows:
-        result = {'answer': '数据库中没有符合条件的数据。', 'chart': None}
+        result = {'answer': '数据库中没有符合条件的数据。', 'chart_option': None}
     else:
         result = _interpret_and_chart(question, cols, rows)
 
-    chart_option = result.get('chart')
+    chart_option = result.get('chart_option')
     chart = {'should_chart': bool(chart_option), 'option': chart_option} if chart_option else {'should_chart': False}
 
     return {
