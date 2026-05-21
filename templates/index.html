@@ -103,69 +103,97 @@ function sendQ() {
     var thinkId = 'think_' + Date.now();
     appendMsg('bot', '<div class="bubble thinking" id="' + thinkId + '">AI 正在思考</div>');
 
+    var answerText = '';
+    var bubbleId = 'bubble_' + Date.now();
+    var bubbleCreated = false;
+
+    function ensureBubble() {
+        if (!bubbleCreated) {
+            var el = document.getElementById(thinkId);
+            if (el) el.parentElement.remove();
+            appendMsg('bot', '<div class="bubble" id="' + bubbleId + '"><div class="answer-text"></div></div>');
+            bubbleCreated = true;
+        }
+    }
+
     fetch('/api/ask', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({question: q})
-    })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-        var el = document.getElementById(thinkId);
-        if (el) el.parentElement.remove();
-        if (data.error) {
-            appendMsg('bot', '<div class="bubble" style="color:#e85d5d;">' + escHtml(data.error) + '</div>');
-        } else {
-            renderAnswer(data);
+    }).then(function(resp) {
+        var reader = resp.body.getReader();
+        var decoder = new TextDecoder();
+        var buf = '';
+
+        function read() {
+            reader.read().then(function(result) {
+                if (result.done) { btn.disabled = false; return; }
+                buf += decoder.decode(result.value, {stream: true});
+                var parts = buf.split('\n\n');
+                buf = parts.pop();
+                parts.forEach(function(part) {
+                    if (!part.startsWith('data: ')) return;
+                    try {
+                        var chunk = JSON.parse(part.slice(6));
+                        if (chunk.type === 'text') {
+                            ensureBubble();
+                            answerText += chunk.text;
+                            var b = document.getElementById(bubbleId);
+                            if (b) {
+                                b.querySelector('.answer-text').innerHTML =
+                                    '<div style="font-size:15px;line-height:1.7;">' + escHtml(answerText) + '</div>';
+                                document.getElementById('chatBox').scrollTop = 9999;
+                            }
+                        } else if (chunk.type === 'done') {
+                            ensureBubble();
+                            renderFinal(bubbleId, answerText, chunk);
+                            btn.disabled = false;
+                        } else if (chunk.type === 'error') {
+                            var el = document.getElementById(thinkId);
+                            if (el) el.parentElement.remove();
+                            appendMsg('bot', '<div class="bubble" style="color:#e85d5d;">' + escHtml(chunk.error) + '</div>');
+                            btn.disabled = false;
+                        }
+                    } catch(e) {}
+                });
+                read();
+            });
         }
-    })
-    .catch(function() {
+        read();
+    }).catch(function() {
         var el = document.getElementById(thinkId);
         if (el) el.parentElement.remove();
         appendMsg('bot', '<div class="bubble" style="color:#e85d5d;">请求失败，请重试</div>');
-    })
-    .finally(function() { btn.disabled = false; });
+        btn.disabled = false;
+    });
 }
 
-function renderAnswer(data) {
+function renderFinal(bubbleId, answerText, data) {
     var chartId = 'chart_' + Date.now();
-    var html = '<div class="bubble">';
-    html += '<div style="font-size:15px;line-height:1.7;">' + escHtml(data.answer) + '</div>';
-    if (data.sql) {
-        html += '<div class="sql-block">' + escHtml(data.sql) + '</div>';
-    }
-
-    if (data.chart && data.chart.should_chart) {
-        html += '<div class="chart-area" id="' + chartId + '"></div>';
-    }
-
+    var b = document.getElementById(bubbleId);
+    if (!b) return;
+    var html = '<div style="font-size:15px;line-height:1.7;">' + escHtml(answerText) + '</div>';
+    if (data.sql) html += '<div class="sql-block">' + escHtml(data.sql) + '</div>';
+    if (data.chart && data.chart.should_chart) html += '<div class="chart-area" id="' + chartId + '"></div>';
     if (data.rows && data.rows.length > 0) {
         html += '<div class="table-wrap"><table><thead><tr>';
         data.columns.forEach(function(c) { html += '<th>' + escHtml(String(c)) + '</th>'; });
         html += '</tr></thead><tbody>';
         data.rows.forEach(function(row) {
             html += '<tr>';
-            row.forEach(function(cell) {
-                html += '<td>' + escHtml(cell === null ? '-' : String(cell)) + '</td>';
-            });
+            row.forEach(function(cell) { html += '<td>' + escHtml(cell === null ? '-' : String(cell)) + '</td>'; });
             html += '</tr>';
         });
         html += '</tbody></table></div>';
-        if (data.total > data.rows.length) {
+        if (data.total > data.rows.length)
             html += '<div class="total-hint">共 ' + data.total + ' 条，显示前 ' + data.rows.length + ' 条</div>';
-        }
     }
-
-    html += '</div>';
-    appendMsg('bot', html);
-
+    b.innerHTML = html;
+    document.getElementById('chatBox').scrollTop = 9999;
     if (data.chart && data.chart.should_chart && data.chart.option) {
         setTimeout(function() {
             var el = document.getElementById(chartId);
-            if (el) {
-                var c = echarts.init(el);
-                c.setOption(data.chart.option);
-                chartInstances[chartId] = c;
-            }
+            if (el) { var c = echarts.init(el); c.setOption(data.chart.option); chartInstances[chartId] = c; }
         }, 50);
     }
 }
