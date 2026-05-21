@@ -16,11 +16,18 @@ def ask():
     if not question:
         return jsonify({'error': '请输入问题'}), 400
 
-    result = sql_agent(question)
+    try:
+        result = sql_agent(question)
+    except Exception as e:
+        return jsonify({'error': f"Agent 异常：{e}", 'sql': ''})
+
     if result['status'] == 'error':
         return jsonify({'error': f"查询失败：{result['error']}", 'sql': result.get('sql', '')})
 
-    chart = chart_agent(question, result['columns'], result['rows'])
+    try:
+        chart = chart_agent(question, result['columns'], result['rows'])
+    except Exception:
+        chart = {'should_chart': False}
 
     return jsonify({
         'answer': result['answer'],
@@ -30,6 +37,11 @@ def ask():
         'total': result['total'],
         'chart': chart,
     })
+
+
+@app.errorhandler(Exception)
+def handle_exception(e):
+    return jsonify({'error': str(e), 'sql': ''}), 500
 
 
 if __name__ == '__main__':
