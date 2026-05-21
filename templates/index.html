@@ -118,7 +118,8 @@ function sendQ() {
         }
     })
     .catch(function() {
-        document.getElementById(thinkId).parentElement.parentElement.remove();
+        var el = document.getElementById(thinkId);
+        if (el) el.parentElement.parentElement.remove();
         appendMsg('bot', '<div class="bubble" style="color:#e85d5d;">请求失败，请重试</div>');
     })
     .finally(function() { btn.disabled = false; });
