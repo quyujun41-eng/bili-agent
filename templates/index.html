@@ -130,7 +130,9 @@ function renderAnswer(data) {
     var chartId = 'chart_' + Date.now();
     var html = '<div class="bubble">';
     html += '<div style="font-size:15px;line-height:1.7;">' + escHtml(data.answer) + '</div>';
-    html += '<div class="sql-block">' + escHtml(data.sql) + '</div>';
+    if (data.sql) {
+        html += '<div class="sql-block">' + escHtml(data.sql) + '</div>';
+    }
 
     if (data.chart && data.chart.should_chart) {
         html += '<div class="chart-area" id="' + chartId + '"></div>';
