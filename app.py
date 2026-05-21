@@ -13,13 +13,15 @@ def index():
 
 @app.route('/api/ask', methods=['POST'])
 def ask():
-    question = (request.get_json(silent=True) or {}).get('question', '').strip()
+    body = request.get_json(silent=True) or {}
+    question = body.get('question', '').strip()
+    history = body.get('history', [])
     if not question:
         return jsonify({'error': '请输入问题'}), 400
 
     def generate():
         try:
-            for chunk in sql_agent_stream(question):
+            for chunk in sql_agent_stream(question, history):
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"

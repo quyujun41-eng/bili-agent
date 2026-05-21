@@ -104,14 +104,15 @@ def _build_chart_option(chart_spec: dict, cols: list, rows: list):
     }
 
 
-def _route_and_sql(question: str) -> dict:
+def _route_and_sql(question: str, history: list) -> dict:
     prompt = (f"{SCHEMA_SHORT}\n用户：{question}\n"
               "输出 JSON（只输出 JSON）：\n"
               f'数据库问题→{{"type":"sql","sql":"SELECT...","chart":{{"type":"bar/line/pie","x_col":"列名","y_col":"列名","title":"标题"}}或null}}\n'
               f'普通聊天→{{"type":"chat"}}')
+    messages = history + [{'role': 'user', 'content': prompt}]
     resp = client.messages.create(
         model=MODEL, max_tokens=200, system=SYSTEM,
-        messages=[{'role': 'user', 'content': prompt}]
+        messages=messages
     )
     try:
         return _extract_json(resp.content[0].text.strip())
@@ -119,15 +120,15 @@ def _route_and_sql(question: str) -> dict:
         return {'type': 'chat'}
 
 
-def sql_agent_stream(question: str):
+def sql_agent_stream(question: str, history: list = []):
     """流式生成器，yield SSE 数据块"""
-    routed = _route_and_sql(question)
+    routed = _route_and_sql(question, history)
 
     if routed.get('type') == 'chat':
-        # 聊天模式：流式输出回答
+        # 聊天模式：流式输出回答（带历史）
         with client.messages.stream(
             model=MODEL, max_tokens=300, system=SYSTEM,
-            messages=[{'role': 'user', 'content': question}]
+            messages=history + [{'role': 'user', 'content': question}]
         ) as stream:
             for text in stream.text_stream:
                 yield {'type': 'text', 'text': text}
