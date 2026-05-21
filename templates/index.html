@@ -120,7 +120,7 @@ function sendQ() {
     fetch('/api/ask', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({question: q, history: history.slice(-20)})
+        body: JSON.stringify({question: q, history: history})
     }).then(function(resp) {
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
