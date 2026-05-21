@@ -71,9 +71,14 @@ def _extract_json(text: str) -> dict:
 
 def _route_and_sql(question: str) -> dict:
     """第一次调用：判断是否需要查数据库，若需要则同时生成 SQL"""
-    prompt = f"""你是一个 B站数据分析助手，同时也可以正常聊天。
-
-{SCHEMA}
+    system = (
+        "你是「B站数据AI分析助手」，一个部署在服务器上的智能助手。"
+        "你的后端已经连接了真实的 SQLite 数据库，你只需要输出 SQL 语句，"
+        "Python 程序会自动执行并把结果返回给用户。"
+        "你不需要自己执行任何查询，只需生成正确的 SQL 文本即可。"
+        "对于普通聊天，用中文友好回答。"
+    )
+    prompt = f"""{SCHEMA}
 
 用户说：{question}
 
@@ -81,13 +86,14 @@ def _route_and_sql(question: str) -> dict:
 - 如果用户在问 B站数据相关问题（需要查数据库），输出：
   {{"type": "sql", "sql": "SELECT ..."}}
 - 如果是普通聊天、闲聊、问你是谁、问其他知识等，输出：
-  {{"type": "chat", "answer": "你的回答"}}
+  {{"type": "chat", "answer": "你的中文回答"}}
 
 只输出 JSON，不要其他内容。"""
 
     resp = client.messages.create(
         model=MODEL,
         max_tokens=512,
+        system=system,
         messages=[{'role': 'user', 'content': prompt}]
     )
     try:
