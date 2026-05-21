@@ -69,45 +69,46 @@ def _extract_json(text: str) -> dict:
     return json.loads(raw)
 
 
-# 第一次调用：生成 SQL
-def _get_sql(question: str) -> str:
-    prompt = f"""{SCHEMA}
+def _route_and_sql(question: str) -> dict:
+    """第一次调用：判断是否需要查数据库，若需要则同时生成 SQL"""
+    prompt = f"""你是一个 B站数据分析助手，同时也可以正常聊天。
 
-用户问题：{question}
+{SCHEMA}
 
-只输出一个 JSON，格式：
-{{"sql": "SELECT ..."}}
-不要输出其他任何内容。"""
+用户说：{question}
+
+判断用户意图并输出 JSON：
+- 如果用户在问 B站数据相关问题（需要查数据库），输出：
+  {{"type": "sql", "sql": "SELECT ..."}}
+- 如果是普通聊天、闲聊、问你是谁、问其他知识等，输出：
+  {{"type": "chat", "answer": "你的回答"}}
+
+只输出 JSON，不要其他内容。"""
 
     resp = client.messages.create(
         model=MODEL,
         max_tokens=512,
         messages=[{'role': 'user', 'content': prompt}]
     )
-    raw = resp.content[0].text.strip()
     try:
-        return json.loads(raw)['sql']
+        return _extract_json(resp.content[0].text.strip())
     except Exception:
-        return _extract_sql(raw)
+        return {'type': 'chat', 'answer': resp.content[0].text.strip()}
 
 
-# 第二次调用：解读结果 + 生成图表配置（合并为一次）
 def _interpret_and_chart(question: str, cols: list, rows: list) -> dict:
+    """第二次调用（仅数据库问题）：解读结果 + 生成图表配置"""
     preview = [dict(zip(cols, r)) for r in rows[:20]]
     prompt = f"""用户问：{question}
 查询列名：{cols}
 数据（前{len(preview)}条/共{len(rows)}条）：{json.dumps(preview, ensure_ascii=False)}
 
-请输出一个 JSON，包含两个字段：
-1. "answer": 用1~3句自然语言回答用户问题，要有具体数字
-2. "chart": 若数据适合图表（柱状图/折线图/饼图），输出标准 ECharts option 对象；若不适合则输出 null
-
-格式：
+请输出一个 JSON：
 {{
-  "answer": "...",
-  "chart": {{ECharts option}} 或 null
+  "answer": "用1~3句自然语言回答用户问题，要有具体数字",
+  "chart": {{标准 ECharts option 对象}} 或 null（若不适合图表）
 }}
-只输出 JSON，不要其他内容。"""
+只输出 JSON。"""
 
     resp = client.messages.create(
         model=MODEL,
@@ -121,7 +122,25 @@ def _interpret_and_chart(question: str, cols: list, rows: list) -> dict:
 
 
 def sql_agent(question: str) -> dict:
-    sql = _get_sql(question)
+    routed = _route_and_sql(question)
+
+    # 普通聊天，直接返回
+    if routed.get('type') == 'chat':
+        return {
+            'status': 'ok',
+            'mode': 'chat',
+            'answer': routed.get('answer', ''),
+            'sql': '',
+            'columns': [],
+            'rows': [],
+            'total': 0,
+            'chart': {'should_chart': False},
+        }
+
+    # 数据库查询
+    sql = routed.get('sql', '')
+    if not sql:
+        return {'status': 'error', 'error': '无法生成 SQL', 'sql': ''}
 
     cols, rows, error = None, None, None
     for attempt in range(2):
@@ -152,6 +171,7 @@ def sql_agent(question: str) -> dict:
 
     return {
         'status': 'ok',
+        'mode': 'sql',
         'sql': sql,
         'columns': cols,
         'rows': rows[:50],
