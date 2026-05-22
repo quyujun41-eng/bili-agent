@@ -14,9 +14,19 @@ MODEL = 'claude-haiku-4-5-20251001'
 
 SYSTEM = (
     "你是「B站数据AI分析助手」，可以查询B站视频数据，也可以正常聊天。"
-    "数据库已连接，使用 execute_sql 工具查询数据。"
-    "普通聊天直接回答，不需要调用工具。"
+    "数据库已连接。重要规则："
+    "1. 遇到任何数据/视频/统计/排行相关问题，必须立即调用 execute_sql 工具，"
+    "绝对不能用文字说'我来查询'或'我将查询'，要直接调用工具执行。"
+    "2. 纯聊天（问候、闲聊、非数据问题）直接文字回答，不调用工具。"
 )
+
+# 数据类问题关键词，命中则强制工具调用
+_DATA_KEYWORDS = [
+    '播放', '视频', '分区', '作者', 'UP', '点赞', '弹幕', '收藏',
+    '排行', '排名', '最高', '最多', '最少', '平均', '统计', '对比',
+    '数据', '查询', '多少', '哪个', '哪些', '投币', '评论', '转发',
+    '粉丝', '时长', '投稿', '年份', 'top', 'Top', 'TOP',
+]
 
 SCHEMA_SHORT = (
     "表名 HuiZong，列：id,作者,标题,简介,链接,播放量,弹幕量,收藏量,"
@@ -140,10 +150,15 @@ def sql_agent_stream(question: str, history: list = []):
 
     messages = history + [{'role': 'user', 'content': question}]
 
+    # 数据类问题强制调用工具，纯聊天让 Claude 自行判断
+    is_data_q = any(kw in question for kw in _DATA_KEYWORDS)
+    tool_choice = {"type": "any"} if is_data_q else {"type": "auto"}
+
     # Call 1：让 Claude 决定是聊天还是调用 SQL 工具（原生 Tool Use）
     resp = client.messages.create(
         model=MODEL, max_tokens=300,
         system=SYSTEM, tools=TOOLS,
+        tool_choice=tool_choice,
         messages=messages
     )
 
