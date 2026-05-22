@@ -1,0 +1,9 @@
+services:
+  bili-agent:
+    build: .
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./config.py:/app/config.py        # 本地 config.py 挂载进容器
+      - ./data:/app/data                  # 数据库目录挂载
+    restart: unless-stopped
