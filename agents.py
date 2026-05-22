@@ -12,54 +12,17 @@ client = anthropic.Anthropic(
 
 MODEL = 'claude-haiku-4-5-20251001'
 
-SYSTEM = (
-    "你是「B站数据AI分析助手」，可以查询B站视频数据，也可以正常聊天。"
-    "数据库已连接。重要规则："
-    "1. 遇到任何数据/视频/统计/排行相关问题，必须立即调用 execute_sql 工具，"
-    "绝对不能用文字说'我来查询'或'我将查询'，要直接调用工具执行。"
-    "2. 纯聊天（问候、闲聊、非数据问题）直接文字回答，不调用工具。"
-)
-
-# 数据类问题关键词，命中则强制工具调用
-_DATA_KEYWORDS = [
-    '播放', '视频', '分区', '作者', 'UP', '点赞', '弹幕', '收藏',
-    '排行', '排名', '最高', '最多', '最少', '平均', '统计', '对比',
-    '数据', '查询', '多少', '哪个', '哪些', '投币', '评论', '转发',
-    '粉丝', '时长', '投稿', '年份', 'top', 'Top', 'TOP',
-]
-
 SCHEMA_SHORT = (
     "表名 HuiZong，列：id,作者,标题,简介,链接,播放量,弹幕量,收藏量,"
     "点赞,评论,转发,投币,粉丝数,时长(秒),分区,投稿时间,data_year(年份)"
 )
 
-# Claude 原生 Tool Use 定义
-TOOLS = [
-    {
-        "name": "execute_sql",
-        "description": f"查询B站视频数据库。{SCHEMA_SHORT}",
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "sql": {
-                    "type": "string",
-                    "description": "要执行的 SELECT SQL 语句"
-                },
-                "chart": {
-                    "type": "object",
-                    "description": "图表规格（可选，适合可视化时提供）",
-                    "properties": {
-                        "type":  {"type": "string", "enum": ["bar", "line", "pie"]},
-                        "x_col": {"type": "string", "description": "X轴列名（原文）"},
-                        "y_col": {"type": "string", "description": "Y轴列名（原文）"},
-                        "title": {"type": "string", "description": "图表标题"}
-                    },
-                    "required": ["type", "x_col", "y_col", "title"]
-                }
-            },
-            "required": ["sql"]
-        }
-    }
+# 数据类问题关键词
+_DATA_KEYWORDS = [
+    '播放', '视频', '分区', '作者', 'UP', '点赞', '弹幕', '收藏',
+    '排行', '排名', '最高', '最多', '最少', '平均', '统计', '对比',
+    '数据', '查询', '多少', '哪个', '哪些', '投币', '评论', '转发',
+    '粉丝', '时长', '投稿', '年份', 'top', 'Top', 'TOP',
 ]
 
 # 查询缓存
@@ -98,7 +61,7 @@ def _extract_sql(text: str) -> str:
     m = re.search(r'```sql\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
     if m:
         return m.group(1).strip()
-    m = re.search(r'(SELECT\s+.*?;)', text, re.DOTALL | re.IGNORECASE)
+    m = re.search(r'(SELECT\s+.*?(?:;|$))', text, re.DOTALL | re.IGNORECASE)
     if m:
         return m.group(1).strip()
     return text.strip()
@@ -136,8 +99,17 @@ def _build_chart_option(chart_spec: dict, cols: list, rows: list):
     }
 
 
+def _auto_chart(sql: str, cols: list, rows: list):
+    """GROUP BY 类查询自动加图表"""
+    if 'GROUP BY' not in sql.upper() or len(cols) < 2 or len(rows) < 2:
+        return {'should_chart': False}
+    spec = {'type': 'bar', 'x_col': cols[0], 'y_col': cols[1], 'title': '数据分析'}
+    option = _build_chart_option(spec, cols, rows)
+    return {'should_chart': True, 'option': option} if option else {'should_chart': False}
+
+
 def sql_agent_stream(question: str, history: list = []):
-    """原生 Tool Use 流式生成器"""
+    """流式生成器：数据问题直接生成 SQL，普通问题直接聊天"""
 
     # 缓存命中
     if not history:
@@ -148,48 +120,36 @@ def sql_agent_stream(question: str, history: list = []):
                    'rows': cached['rows'], 'total': cached['total'], 'chart': cached['chart']}
             return
 
-    messages = history + [{'role': 'user', 'content': question}]
-
-    # 数据类问题强制调用工具，纯聊天让 Claude 自行判断
     is_data_q = any(kw in question for kw in _DATA_KEYWORDS)
-    tool_choice = {"type": "any"} if is_data_q else {"type": "auto"}
 
-    # Call 1：让 Claude 决定是聊天还是调用 SQL 工具
-    resp = client.messages.create(
-        model=MODEL, max_tokens=300,
-        system=SYSTEM, tools=TOOLS,
-        tool_choice=tool_choice,
-        messages=messages
-    )
-
-    # 纯聊天且没调用工具时重试一次（保底）
-    if resp.stop_reason != 'tool_use' and is_data_q:
-        retry_messages = history + [{'role': 'user', 'content': f"用execute_sql工具查询：{question}"}]
+    # ── 普通聊天 ──────────────────────────────────────────────────────────────
+    if not is_data_q:
+        messages = history + [{'role': 'user', 'content': question}]
         resp = client.messages.create(
             model=MODEL, max_tokens=300,
-            system=SYSTEM, tools=TOOLS,
-            tool_choice={"type": "any"},
-            messages=retry_messages
+            system="你是B站数据AI分析助手，可以正常聊天回答各种问题。",
+            messages=messages
         )
-
-    # 纯聊天：Claude 没有调用工具，直接流式输出回答
-    if resp.stop_reason != 'tool_use':
-        answer = ''.join(
-            b.text for b in resp.content if hasattr(b, 'text')
-        )
-        # 模拟流式（字符分块输出）
-        chunk_size = 4
-        for i in range(0, len(answer), chunk_size):
-            yield {'type': 'text', 'text': answer[i:i+chunk_size]}
+        answer = ''.join(b.text for b in resp.content if hasattr(b, 'text'))
+        for i in range(0, len(answer), 4):
+            yield {'type': 'text', 'text': answer[i:i+4]}
         yield {'type': 'done', 'sql': '', 'columns': [], 'rows': [], 'total': 0,
                'chart': {'should_chart': False}}
         return
 
-    # 找到 tool_use 块
-    tool_use_block = next(b for b in resp.content if b.type == 'tool_use')
-    tool_input = tool_use_block.input
-    sql = tool_input.get('sql', '')
-    chart_spec = tool_input.get('chart')
+    # ── 数据查询：直接让 Claude 生成 SQL 文本 ──────────────────────────────────
+    sql_prompt = (
+        f"你是SQLite专家。根据用户问题生成查询语句。\n"
+        f"{SCHEMA_SHORT}\n"
+        f"用户问题：{question}\n\n"
+        f"只输出SQL语句，不要任何其他文字："
+    )
+    sql_resp = client.messages.create(
+        model=MODEL, max_tokens=200,
+        messages=[{'role': 'user', 'content': sql_prompt}]
+    )
+    sql_text = ''.join(b.text for b in sql_resp.content if hasattr(b, 'text'))
+    sql = _extract_sql(sql_text)
 
     if not sql:
         yield {'type': 'error', 'error': '无法生成 SQL'}
@@ -204,26 +164,16 @@ def sql_agent_stream(question: str, history: list = []):
         except Exception as e:
             error = str(e)
             if attempt == 0:
-                # 把错误反馈给 Claude，让它修正（标准 tool_result 格式）
-                fix_messages = messages + [
-                    {'role': 'assistant', 'content': resp.content},
-                    {'role': 'user', 'content': [{
-                        'type': 'tool_result',
-                        'tool_use_id': tool_use_block.id,
-                        'content': f'SQL执行报错：{error}，请修正SQL后重新调用工具。',
-                        'is_error': True
-                    }]}
-                ]
+                fix_prompt = (
+                    f"以下SQL有错误，请修正：\nSQL: {sql}\n错误: {error}\n"
+                    f"{SCHEMA_SHORT}\n只输出修正后的SQL："
+                )
                 fix_resp = client.messages.create(
                     model=MODEL, max_tokens=200,
-                    system=SYSTEM, tools=TOOLS,
-                    messages=fix_messages
+                    messages=[{'role': 'user', 'content': fix_prompt}]
                 )
-                if fix_resp.stop_reason == 'tool_use':
-                    fix_block = next(b for b in fix_resp.content if b.type == 'tool_use')
-                    sql = fix_block.input.get('sql', sql)
-                    tool_use_block = fix_block
-                    resp = fix_resp
+                sql_text = ''.join(b.text for b in fix_resp.content if hasattr(b, 'text'))
+                sql = _extract_sql(sql_text)
 
     if error and cols is None:
         yield {'type': 'error', 'error': f'查询失败：{error}', 'sql': sql}
@@ -235,31 +185,24 @@ def sql_agent_stream(question: str, history: list = []):
                'chart': {'should_chart': False}}
         return
 
-    # Call 2：把 tool_result 发回给 Claude，流式输出解读
+    # 让 Claude 流式解读结果
     preview = [dict(zip(cols, r)) for r in rows[:10]]
-    tool_result_messages = messages + [
-        {'role': 'assistant', 'content': resp.content},
-        {'role': 'user', 'content': [{
-            'type': 'tool_result',
-            'tool_use_id': tool_use_block.id,
-            'content': (f"查询成功，列名：{cols}，"
-                        f"共{len(rows)}条，前{len(preview)}条数据："
-                        f"{json.dumps(preview, ensure_ascii=False)}\n"
-                        f"请用1-2句中文回答用户，带具体数字。")
-        }]}
-    ]
-
+    interpret_prompt = (
+        f"用户问：{question}\n"
+        f"查询到{len(rows)}条数据，前{len(preview)}条：\n"
+        f"{json.dumps(preview, ensure_ascii=False)}\n"
+        f"用1-2句中文回答，带具体数字："
+    )
     answer_text = ''
     with client.messages.stream(
-        model=MODEL, max_tokens=150, system=SYSTEM,
-        messages=tool_result_messages
+        model=MODEL, max_tokens=150,
+        messages=[{'role': 'user', 'content': interpret_prompt}]
     ) as stream:
         for text in stream.text_stream:
             answer_text += text
             yield {'type': 'text', 'text': text}
 
-    chart_option = _build_chart_option(chart_spec, cols, rows)
-    chart = {'should_chart': True, 'option': chart_option} if chart_option else {'should_chart': False}
+    chart = _auto_chart(sql, cols, rows)
 
     if not history:
         _cache_set(question, answer_text, sql, cols, rows[:50], len(rows), chart)
