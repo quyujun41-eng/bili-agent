@@ -4,6 +4,6 @@ services:
     ports:
       - "5001:5001"
     volumes:
-      - ./config.py:/app/config.py        # 本地 config.py 挂载进容器
-      - ./data:/app/data                  # 数据库目录挂载
+      - ./config.py:/app/config.py                          # 配置文件
+      - ../bilibili.db:/bilibili.db                         # 数据库（容器内路径 /bilibili.db）
     restart: unless-stopped
