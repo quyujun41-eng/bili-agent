@@ -2,6 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>B站数据 AI 分析</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
@@ -34,13 +35,18 @@ tr:nth-child(even) td { background: #f8f9ff; }
 
 .total-hint { font-size: 12px; color: #aaa; margin-top: 6px; }
 
+.btn-row { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-csv { padding: 4px 12px; font-size: 12px; border: 1px solid #4a90e2; color: #4a90e2;
+           background: #fff; border-radius: 12px; cursor: pointer; transition: all .15s; }
+.btn-csv:hover { background: #4a90e2; color: #fff; }
+
 .input-row { display: flex; gap: 10px; }
 .input-row input { flex: 1; padding: 12px 16px; border: 1.5px solid #d0d8f0; border-radius: 24px;
-                   font-size: 15px; outline: none; transition: border .2s; }
+                   font-size: 15px; outline: none; transition: border .2s; min-width: 0; }
 .input-row input:focus { border-color: #4a90e2; }
 .input-row button { padding: 12px 24px; background: #4a90e2; color: #fff; border: none;
                     border-radius: 24px; font-size: 15px; cursor: pointer; font-weight: bold;
-                    transition: background .2s; white-space: nowrap; }
+                    transition: background .2s; white-space: nowrap; flex-shrink: 0; }
 .input-row button:disabled { background: #b0c8f0; cursor: default; }
 .input-row button:hover:not(:disabled) { background: #357abd; }
 
@@ -52,6 +58,21 @@ tr:nth-child(even) td { background: #f8f9ff; }
 .thinking { color: #aaa; font-size: 13px; padding: 8px 0; }
 .thinking::after { content: ''; animation: dots 1.2s infinite; }
 @keyframes dots { 0%,20%{content:'.'} 40%{content:'..'} 60%,100%{content:'...'} }
+
+/* 移动端适配 */
+@media (max-width: 600px) {
+    .header { padding: 12px 16px; font-size: 15px; }
+    .header span { display: none; }
+    .container { padding: 12px 8px; }
+    .chat-box { min-height: 280px; max-height: 58vh; padding: 12px; }
+    .msg.bot .bubble, .msg.user .bubble { max-width: 95%; }
+    .suggestions button { font-size: 12px; padding: 5px 10px; }
+    .input-row input { font-size: 13px; padding: 10px 12px; }
+    .input-row button { padding: 10px 16px; font-size: 13px; }
+    table { font-size: 11px; }
+    th, td { padding: 4px 6px; }
+    .chart-area { height: 220px; }
+}
 </style>
 </head>
 <body>
@@ -76,14 +97,14 @@ tr:nth-child(even) td { background: #f8f9ff; }
     </div>
 
     <div class="input-row">
-        <input id="inputQ" type="text" placeholder="输入你的问题，比如：哪个分区的视频平均时长最长？" onkeydown="if(event.key==='Enter')sendQ()"/>
+        <input id="inputQ" type="text" placeholder="输入问题，如：哪个分区视频平均时长最长？" onkeydown="if(event.key==='Enter')sendQ()"/>
         <button id="sendBtn" onclick="sendQ()">发送</button>
     </div>
 </div>
 
 <script>
 var chartInstances = {};
-var history = [];  // [{role:'user',content:''}, {role:'assistant',content:''}]
+var history = [];
 
 function ask(q) {
     document.getElementById('inputQ').value = q;
@@ -190,15 +211,36 @@ function renderFinal(bubbleId, answerText, data) {
         html += '</tbody></table></div>';
         if (data.total > data.rows.length)
             html += '<div class="total-hint">共 ' + data.total + ' 条，显示前 ' + data.rows.length + ' 条</div>';
+        // CSV 下载按钮
+        html += '<div class="btn-row"><button class="btn-csv" onclick="downloadCSV(this)">下载 CSV</button></div>';
     }
     b.innerHTML = html;
     document.getElementById('chatBox').scrollTop = 9999;
     if (data.chart && data.chart.should_chart && data.chart.option) {
         setTimeout(function() {
             var el = document.getElementById(chartId);
-            if (el) { var c = echarts.init(el); c.setOption(data.chart.option); chartInstances[chartId] = c; }
+            if (el) {
+                var c = echarts.init(el);
+                c.setOption(data.chart.option);
+                chartInstances[chartId] = c;
+            }
         }, 50);
     }
+}
+
+function downloadCSV(btn) {
+    var table = btn.closest('.bubble').querySelector('table');
+    if (!table) return;
+    var csv = Array.from(table.querySelectorAll('tr')).map(function(row) {
+        return Array.from(row.querySelectorAll('th,td')).map(function(cell) {
+            return '"' + cell.textContent.replace(/"/g, '""') + '"';
+        }).join(',');
+    }).join('\n');
+    var blob = new Blob(['﻿' + csv], {type: 'text/csv;charset=utf-8'});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'bili_data.csv'; a.click();
+    URL.revokeObjectURL(url);
 }
 
 function appendMsg(role, content) {
