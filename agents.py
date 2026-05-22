@@ -150,20 +150,25 @@ def sql_agent_stream(question: str, history: list = []):
 
     messages = history + [{'role': 'user', 'content': question}]
 
+    # 数据类问题强制调用工具，纯聊天让 Claude 自行判断
+    is_data_q = any(kw in question for kw in _DATA_KEYWORDS)
+    tool_choice = {"type": "any"} if is_data_q else {"type": "auto"}
+
     # Call 1：让 Claude 决定是聊天还是调用 SQL 工具
     resp = client.messages.create(
         model=MODEL, max_tokens=300,
         system=SYSTEM, tools=TOOLS,
+        tool_choice=tool_choice,
         messages=messages
     )
 
-    # 数据类问题但 Claude 没调用工具（说了"我来查询"之类的）→ 重试
-    is_data_q = any(kw in question for kw in _DATA_KEYWORDS)
+    # 纯聊天且没调用工具时重试一次（保底）
     if resp.stop_reason != 'tool_use' and is_data_q:
         retry_messages = history + [{'role': 'user', 'content': f"用execute_sql工具查询：{question}"}]
         resp = client.messages.create(
             model=MODEL, max_tokens=300,
             system=SYSTEM, tools=TOOLS,
+            tool_choice={"type": "any"},
             messages=retry_messages
         )
 
