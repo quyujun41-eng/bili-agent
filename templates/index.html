@@ -104,7 +104,7 @@ tr:nth-child(even) td { background: #f8f9ff; }
 
 <script>
 var chartInstances = {};
-var history = [];
+var chatHistory = [];
 
 function ask(q) {
     document.getElementById('inputQ').value = q;
@@ -141,7 +141,7 @@ function sendQ() {
     fetch('/api/ask', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({question: q, history: history})
+        body: JSON.stringify({question: q, history: chatHistory})
     }).then(function(resp) {
         var reader = resp.body.getReader();
         var decoder = new TextDecoder();
@@ -169,8 +169,8 @@ function sendQ() {
                         } else if (chunk.type === 'done') {
                             ensureBubble();
                             renderFinal(bubbleId, answerText, chunk);
-                            history.push({role: 'user', content: q});
-                            history.push({role: 'assistant', content: answerText});
+                            chatHistory.push({role: 'user', content: q});
+                            chatHistory.push({role: 'assistant', content: answerText});
                             btn.disabled = false;
                         } else if (chunk.type === 'error') {
                             var el = document.getElementById(thinkId);
