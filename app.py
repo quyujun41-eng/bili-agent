@@ -1,4 +1,5 @@
 import json
+import traceback
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 import config
 from agents import sql_agent_stream
@@ -24,6 +25,7 @@ def ask():
             for chunk in sql_agent_stream(question, history):
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
         except Exception as e:
+            traceback.print_exc()
             yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
 
     return Response(
