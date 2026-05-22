@@ -1,6 +1,7 @@
 import sqlite3
 import json
 import re
+import time
 import anthropic
 import config
 
@@ -22,32 +23,31 @@ SCHEMA_SHORT = (
     "点赞,评论,转发,投币,粉丝数,时长(秒),分区,投稿时间,data_year(年份)"
 )
 
-SCHEMA = """
-数据库：SQLite，表名：HuiZong（B站视频数据）
+# 查询缓存：{question -> {ts, answer, sql, columns, rows, total, chart}}
+_cache: dict = {}
+_CACHE_TTL = 1800  # 30 分钟
 
-列名（全部中文，SQL中必须原样使用）：
-  id          INTEGER  主键
-  作者         TEXT     UP主名字
-  标题         TEXT     视频标题
-  简介         TEXT     视频简介
-  链接         TEXT     视频URL
-  播放量        FLOAT    播放次数
-  弹幕量        FLOAT    弹幕数量
-  收藏量        FLOAT    收藏数
-  点赞         FLOAT    点赞数
-  评论         FLOAT    评论数
-  转发         FLOAT    转发数
-  投币         FLOAT    投币数
-  粉丝数        FLOAT    UP主粉丝数
-  时长         FLOAT    视频时长（秒）
-  分区         TEXT     视频分类，如：搞笑、美食制作、游戏、音乐、科技等
-  投稿时间      DATETIME 发布时间
-  data_year    INTEGER  数据年份（2023/2024/2025/2026）
-"""
+
+def _cache_get(question: str):
+    entry = _cache.get(question.strip().lower())
+    if entry and time.time() - entry['ts'] < _CACHE_TTL:
+        return entry
+    return None
+
+
+def _cache_set(question: str, answer: str, sql: str, columns, rows, total, chart):
+    _cache[question.strip().lower()] = {
+        'ts': time.time(),
+        'answer': answer, 'sql': sql,
+        'columns': columns, 'rows': rows,
+        'total': total, 'chart': chart,
+    }
 
 
 def _run_sql(sql: str):
-    conn = sqlite3.connect(config.DB_PATH)
+    # 只读连接，防止 SQL 注入写操作
+    uri = f'file:{config.DB_PATH}?mode=ro'
+    conn = sqlite3.connect(uri, uri=True)
     try:
         cur = conn.cursor()
         cur.execute(sql)
@@ -87,16 +87,19 @@ def _build_chart_option(chart_spec: dict, cols: list, rows: list):
     xi, yi = cols.index(x_col), cols.index(y_col)
     x_data = [str(r[xi]) for r in rows[:20]]
     y_data = [round(float(r[yi]), 2) if r[yi] is not None else 0 for r in rows[:20]]
+    toolbox = {'feature': {'saveAsImage': {'title': '保存图片', 'pixelRatio': 2}}}
     if chart_type == 'pie':
         return {
             'title': {'text': title, 'left': 'center'},
             'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
+            'toolbox': toolbox,
             'series': [{'type': 'pie', 'radius': '60%',
                         'data': [{'name': x, 'value': y} for x, y in zip(x_data, y_data)]}]
         }
     return {
         'title': {'text': title},
         'tooltip': {'trigger': 'axis'},
+        'toolbox': toolbox,
         'grid': {'bottom': '20%'},
         'xAxis': {'type': 'category', 'data': x_data, 'axisLabel': {'rotate': 30}},
         'yAxis': {'type': 'value'},
@@ -122,10 +125,19 @@ def _route_and_sql(question: str, history: list) -> dict:
 
 def sql_agent_stream(question: str, history: list = []):
     """流式生成器，yield SSE 数据块"""
+
+    # 缓存命中（仅无历史上下文的独立查询）
+    if not history:
+        cached = _cache_get(question)
+        if cached:
+            yield {'type': 'text', 'text': cached['answer']}
+            yield {'type': 'done', 'sql': cached['sql'], 'columns': cached['columns'],
+                   'rows': cached['rows'], 'total': cached['total'], 'chart': cached['chart']}
+            return
+
     routed = _route_and_sql(question, history)
 
     if routed.get('type') == 'chat':
-        # 聊天模式：流式输出回答（带历史）
         with client.messages.stream(
             model=MODEL, max_tokens=300, system=SYSTEM,
             messages=history + [{'role': 'user', 'content': question}]
@@ -136,13 +148,11 @@ def sql_agent_stream(question: str, history: list = []):
                'chart': {'should_chart': False}}
         return
 
-    # 数据库模式
     sql = routed.get('sql', '')
     if not sql:
         yield {'type': 'error', 'error': '无法生成 SQL'}
         return
 
-    # 执行 SQL（含一次自动修正）
     cols, rows, error = None, None, None
     for attempt in range(2):
         try:
@@ -168,20 +178,26 @@ def sql_agent_stream(question: str, history: list = []):
                'chart': {'should_chart': False}}
         return
 
-    # 流式输出解读
     preview = [dict(zip(cols, r)) for r in rows[:10]]
     interp_prompt = (f"用户问：{question}\n列名：{cols}\n"
                      f"数据（前{len(preview)}条/共{len(rows)}条）："
                      f"{json.dumps(preview, ensure_ascii=False)}\n"
                      "用1-2句中文回答，带具体数字，不要废话。")
+    answer_text = ''
     with client.messages.stream(
         model=MODEL, max_tokens=150, system=SYSTEM,
         messages=[{'role': 'user', 'content': interp_prompt}]
     ) as stream:
         for text in stream.text_stream:
+            answer_text += text
             yield {'type': 'text', 'text': text}
 
     chart_option = _build_chart_option(routed.get('chart'), cols, rows)
     chart = {'should_chart': True, 'option': chart_option} if chart_option else {'should_chart': False}
-    yield {'type': 'done', 'sql': sql, 'columns': cols,
-           'rows': rows[:50], 'total': len(rows), 'chart': chart}
+    done_data = {'sql': sql, 'columns': cols, 'rows': rows[:50], 'total': len(rows), 'chart': chart}
+
+    # 缓存结果（仅独立查询）
+    if not history:
+        _cache_set(question, answer_text, sql, cols, rows[:50], len(rows), chart)
+
+    yield {'type': 'done', **done_data}
