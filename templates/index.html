@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>B站数据 AI 分析</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f4f6fb; min-height: 100vh; }
@@ -34,6 +35,20 @@ td { padding: 5px 10px; border-bottom: 1px solid #f0f0f0; }
 tr:nth-child(even) td { background: #f8f9ff; }
 
 .total-hint { font-size: 12px; color: #aaa; margin-top: 6px; }
+
+/* Markdown 渲染样式 */
+.md-body { font-size: 15px; line-height: 1.8; }
+.md-body h1, .md-body h2, .md-body h3 { margin: 10px 0 6px; font-size: 15px; color: #2c3e50; }
+.md-body strong { color: #2c5aad; }
+.md-body p { margin: 4px 0; }
+.md-body ul, .md-body ol { padding-left: 20px; margin: 4px 0; }
+.md-body li { margin: 2px 0; }
+.md-body table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+.md-body th { background: #4a90e2; color: #fff; padding: 6px 10px; text-align: left; }
+.md-body td { padding: 5px 10px; border-bottom: 1px solid #eef0f8; }
+.md-body tr:nth-child(even) td { background: #f8f9ff; }
+.md-body code { background: #f0f4ff; padding: 1px 5px; border-radius: 3px; font-size: 13px; }
+.md-body blockquote { border-left: 3px solid #4a90e2; padding-left: 10px; color: #666; margin: 6px 0; }
 
 .btn-row { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
 .btn-csv { padding: 4px 12px; font-size: 12px; border: 1px solid #4a90e2; color: #4a90e2;
@@ -163,7 +178,7 @@ function sendQ() {
                             var b = document.getElementById(bubbleId);
                             if (b) {
                                 b.querySelector('.answer-text').innerHTML =
-                                    '<div style="font-size:15px;line-height:1.7;">' + escHtml(answerText) + '</div>';
+                                    '<div class="md-body">' + marked.parse(answerText) + '</div>';
                                 document.getElementById('chatBox').scrollTop = 9999;
                             }
                         } else if (chunk.type === 'done') {
@@ -196,7 +211,7 @@ function renderFinal(bubbleId, answerText, data) {
     var chartId = 'chart_' + Date.now();
     var b = document.getElementById(bubbleId);
     if (!b) return;
-    var html = '<div style="font-size:15px;line-height:1.7;">' + escHtml(answerText) + '</div>';
+    var html = '<div class="md-body">' + marked.parse(answerText) + '</div>';
     if (data.sql) html += '<div class="sql-block">' + escHtml(data.sql) + '</div>';
     if (data.chart && data.chart.should_chart) html += '<div class="chart-area" id="' + chartId + '"></div>';
     if (data.rows && data.rows.length > 0) {
