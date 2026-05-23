@@ -3,7 +3,8 @@ services:
     build: .
     ports:
       - "5001:5001"
+    env_file:
+      - .env
     volumes:
-      - ./config.py:/app/config.py                          # 配置文件
-      - ../bilibili.db:/bilibili.db                         # 数据库（容器内路径 /bilibili.db）
+      - ../bilibili.db:/bilibili.db
     restart: unless-stopped
