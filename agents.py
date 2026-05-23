@@ -15,9 +15,45 @@ def _cache_set(key, data):
     _cache[key.strip().lower()] = {'ts': time.time(), **data}
 
 def _auto_chart(sql, cols, rows):
+    """自动判断并生成图表配置，支持单系列和双年份对比"""
     if 'GROUP BY' not in sql.upper() or len(cols) < 2 or len(rows) < 2:
         return {'should_chart': False}
+
+    # 检测是否为年份对比（含2025/2026两列数值）
+    num_cols = []
+    for i, c in enumerate(cols):
+        if i == 0:
+            continue
+        sample = [r[i] for r in rows[:5] if r[i] is not None]
+        if sample and all(isinstance(v, (int, float)) for v in sample):
+            num_cols.append(i)
+
     x_data = [str(r[0]) for r in rows[:20]]
+
+    # 双系列对比（如 2025 vs 2026）
+    if len(num_cols) >= 2 and len(cols) >= 3:
+        series = []
+        colors = ['#4a90e2', '#e2904a', '#4ae2a0', '#e24a90']
+        for idx, ci in enumerate(num_cols[:4]):
+            y_data = [round(float(r[ci]), 2) if r[ci] is not None else 0 for r in rows[:20]]
+            series.append({
+                'name': str(cols[ci]),
+                'type': 'bar',
+                'data': y_data,
+                'itemStyle': {'color': colors[idx % len(colors)]}
+            })
+        return {'should_chart': True, 'option': {
+            'title': {'text': '数据对比分析'},
+            'tooltip': {'trigger': 'axis'},
+            'legend': {'data': [str(cols[ci]) for ci in num_cols[:4]]},
+            'toolbox': {'feature': {'saveAsImage': {'title': '保存'}}},
+            'grid': {'bottom': '25%'},
+            'xAxis': {'type': 'category', 'data': x_data, 'axisLabel': {'rotate': 30}},
+            'yAxis': {'type': 'value'},
+            'series': series
+        }}
+
+    # 单系列
     y_data = [round(float(r[1]), 2) if r[1] is not None else 0 for r in rows[:20]]
     return {'should_chart': True, 'option': {
         'title': {'text': '数据分析'},
@@ -86,17 +122,32 @@ def _sql_agent_stream(question, history):
         yield {'type': 'done', 'sql': sql, 'columns': [], 'rows': [],
                'total': 0, 'chart': {'should_chart': False}, 'agent': 'sql_agent'}
         return
-    prompt = ('用户问：' + question + '\n找到' + str(total) + '条，前' +
-              str(len(rows[:10])) + '条：' +
-              json.dumps(rows[:10], ensure_ascii=False) +
-              '\n用中文回答，带具体数字：')
+
+    # rows 是 list of dicts，转成 list of lists 供前端表格渲染
+    rows_raw = [[v for v in r.values()] for r in rows[:50]] if rows else []
+
+    # 根据数据量动态调整 prompt 策略
+    if total <= 20:
+        prompt = ('用户问：' + question + '\n查询到 ' + str(total) + ' 条数据：\n' +
+                  json.dumps(rows, ensure_ascii=False) +
+                  '\n请逐条列出所有结果，用中文回答。'
+                  '每条只列出最关键的字段（如：排名、标题、作者、播放量等核心数值），'
+                  '不要列出简介、链接等长文本字段，保持简洁。'
+                  '完整数据已在下方表格展示，文字部分突出重点即可，不要省略任何一条：')
+        max_tok = 1500
+    else:
+        prompt = ('用户问：' + question + '\n共查询到 ' + str(total) + ' 条数据，以下是完整列表：\n' +
+                  json.dumps(rows[:30], ensure_ascii=False) +
+                  '\n请用中文分析数据趋势，列出最重要的前10条结果（带具体数字），'
+                  '并在最后用1-2句话总结整体规律。下方表格会展示完整数据，文字部分无需列出全部。')
+        max_tok = 800
+
     answer = ''
-    for text in _stream_llm(prompt, []):
+    for text in _stream_llm(prompt, [], max_tokens=max_tok):
         answer += text
         yield {'type': 'text', 'text': text}
-    rows_raw = [[v for v in r.values()] for r in rows[:50]] if rows else []
     chart = _auto_chart(sql, cols, rows_raw)
-    yield {'type': 'done', 'sql': sql, 'columns': cols, 'rows': rows[:50],
+    yield {'type': 'done', 'sql': sql, 'columns': cols, 'rows': rows_raw,
            'total': total, 'chart': chart, 'agent': 'sql_agent'}
 
 def _rag_agent_stream(question, history):
