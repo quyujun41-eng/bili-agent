@@ -8,3 +8,5 @@ langchain-core
 faiss-cpu
 fastembed
 numpy
+jieba
+rank-bm25
