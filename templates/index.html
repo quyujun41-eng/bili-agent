@@ -90,6 +90,19 @@ body {
 .dot.sql  { background: #34d399; box-shadow: 0 0 5px #34d39960; }
 .dot.rag  { background: #60a5fa; box-shadow: 0 0 5px #60a5fa60; }
 .dot.chat { background: #f472b6; box-shadow: 0 0 5px #f472b660; }
+.mem-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: rgba(99,102,241,.18); border-radius: 6px;
+  padding: 3px 8px; font-size: 11px; color: rgba(255,255,255,.7);
+  margin-top: 8px;
+}
+.new-chat-btn {
+  width: 100%; margin-top: 10px; padding: 7px;
+  background: rgba(255,255,255,.06); border: 1px solid rgba(255,255,255,.1);
+  border-radius: 8px; color: rgba(255,255,255,.6); font-size: 12px;
+  cursor: pointer; transition: background .15s;
+}
+.new-chat-btn:hover { background: rgba(255,255,255,.12); color: #fff; }
 
 /* ── MAIN ── */
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
@@ -362,6 +375,8 @@ body {
     <div class="agent-row"><span class="dot sql"></span>SQL 数据查询</div>
     <div class="agent-row"><span class="dot rag"></span>RAG 语义搜索</div>
     <div class="agent-row"><span class="dot chat"></span>对话分析</div>
+    <div class="mem-badge" id="memBadge"><span>&#x1F9E0;</span><span id="memTurns">记忆：0 轮</span></div>
+    <button class="new-chat-btn" onclick="newChat()">+ 新对话</button>
   </div>
 </aside>
 
@@ -370,7 +385,7 @@ body {
   <div class="topbar">
     <div>
       <div class="topbar-title">B站数据 AI 分析助手</div>
-      <div class="topbar-sub">多 Agent 协作 · 自动生成 SQL · 流式输出 · 智能可视化</div>
+      <div class="topbar-sub">多 Agent 协作 · LangGraph 路由 · 混合检索 RAG · 对话记忆</div>
     </div>
     <div class="status-pill"><span class="sdot"></span>在线运行中</div>
   </div>
@@ -401,7 +416,15 @@ body {
 
 <script>
 var chartInstances = {};
-var chatHistory = [];
+var sessionId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+
+function newChat() {
+  sessionId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+  document.getElementById('memTurns').textContent = '记忆：0 轮';
+  fetch('/api/session/clear', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({session_id: sessionId})});
+  var box = document.getElementById('chatBox');
+  box.innerHTML = '<div class="welcome"><div class="wicon">&#x2728;</div><div class="wtitle">新对话已开始</div><div class="wsub">历史记忆已清空</div></div>';
+}
 
 function ask(q) {
   document.getElementById('inputQ').value = q;
@@ -439,7 +462,7 @@ function sendQ() {
   fetch('/api/ask', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({question: q, history: chatHistory})
+    body: JSON.stringify({question: q, session_id: sessionId})
   }).then(function(resp) {
     var reader  = resp.body.getReader();
     var decoder = new TextDecoder();
@@ -466,11 +489,12 @@ function sendQ() {
                   '<div class="md-body">' + marked.parse(answerText) + '</div>';
                 scrollBottom();
               }
+            } else if (chunk.type === 'memory') {
+              var t = chunk.turns || 0;
+              document.getElementById('memTurns').textContent = '记忆：' + t + ' 轮';
             } else if (chunk.type === 'done') {
               ensureBubble();
               renderFinal(bubbleId, answerText, chunk);
-              chatHistory.push({role:'user',     content: q});
-              chatHistory.push({role:'assistant', content: answerText});
               btn.disabled = false;
             } else if (chunk.type === 'error') {
               var el = document.getElementById(thinkId);

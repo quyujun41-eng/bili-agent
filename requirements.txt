@@ -5,5 +5,8 @@ langchain
 langchain-anthropic
 langchain-openai
 langchain-core
+langgraph
 numpy
 chromadb
+rank-bm25
+jieba
