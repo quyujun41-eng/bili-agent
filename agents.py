@@ -1,6 +1,6 @@
 import json, time, config, rag, memory as mem
 from llm_client import get_client, get_model, get_anthropic_client
-from tools import sql_query_tool, rag_search_tool
+from tools import sql_query_tool
 import graph as ag
 
 _cache = {}
@@ -44,6 +44,30 @@ def _stream_llm(prompt, history, system=None, max_tokens=300):
             text = chunk.choices[0].delta.content or ""
             if text: yield text
 
+
+def _rewrite_query(question: str, history: list) -> str:
+    """多轮上下文感知查询改写：将含隐含上下文的追问改写为独立检索词"""
+    if not history:
+        return question
+    recent = history[-4:]
+    prompt = (
+        "根据对话历史，将用户最新问题改写为独立的检索查询（不超过25字，无代词）。"
+        "只输出改写后的查询：\n"
+        f"历史：{json.dumps(recent, ensure_ascii=False)}\n"
+        f"问题：{question}"
+    )
+    try:
+        client = get_client()
+        resp = client.chat.completions.create(
+            model=get_model(), max_tokens=60,
+            messages=[{"role":"user","content":prompt}]
+        )
+        r = resp.choices[0].message.content.strip()
+        return r if r else question
+    except Exception:
+        return question
+
+
 def _sql_agent_stream(question, history):
     result = json.loads(sql_query_tool.invoke(question))
     if "error" in result:
@@ -56,33 +80,47 @@ def _sql_agent_stream(question, history):
         yield {"type":"done","sql":sql,"columns":[],"rows":[],"total":0,"chart":{"should_chart":False},"agent":"sql_agent"}
         return
     if total <= 20:
-        prompt = "用户问："+question+"\n查到"+str(total)+"条数据：\n"+json.dumps(rows,ensure_ascii=False)+"\n逐条列出关键字段（排名/标题/作者/核心数值），不列简介/链接，简洁："
+        prompt = "用户问："+question+"\n查到"+str(total)+"条数据：\n"+json.dumps(rows,ensure_ascii=False)+"\n逐条列出关键字段（排名/标题/作者/核心数值），简洁："
         max_tok = 1500
     else:
-        prompt = "用户问："+question+"\n共"+str(total)+"条，前30条：\n"+json.dumps(rows[:30],ensure_ascii=False)+"\n分析趋势，列出最重要的前10条（带数字），最后1-2句总结："
+        prompt = "用户问："+question+"\n共"+str(total)+"条，前30条：\n"+json.dumps(rows[:30],ensure_ascii=False)+"\n分析趋势，列出最重要前10条（带数字），最后1-2句总结："
         max_tok = 800
     for text in _stream_llm(prompt, history, max_tokens=max_tok): yield {"type":"text","text":text}
-    chart = _auto_chart(sql, cols, rows_raw)
-    yield {"type":"done","sql":sql,"columns":cols,"rows":rows_raw,"total":total,"chart":chart,"agent":"sql_agent"}
+    yield {"type":"done","sql":sql,"columns":cols,"rows":rows_raw,"total":total,"chart":_auto_chart(sql,cols,rows_raw),"agent":"sql_agent"}
+
 
 def _rag_agent_stream(question, history):
-    results = json.loads(rag_search_tool.invoke(question))
+    # Step 1: 查询改写（上下文感知）
+    search_query = _rewrite_query(question, history)
+    if search_query != question:
+        yield {"type":"rewrite","original":question,"rewritten":search_query}
+
+    # Step 2: 混合检索
+    results = rag.search(search_query, top_k=8)
     if not results:
         yield {"type":"text","text":"没有找到相关视频。"}
         yield {"type":"done","sql":"","columns":[],"rows":[],"total":0,"chart":{"should_chart":False},"agent":"rag_agent"}
         return
-    hybrid_flag = results[0].get("hybrid",False) if results else False
+
+    hybrid_flag = results[0].get("hybrid", False)
     mode_note = "（混合检索）" if hybrid_flag else "（语义检索）"
-    prompt = "用户问："+question+"\n搜索结果"+mode_note+"：\n"+json.dumps(results,ensure_ascii=False)+"\n用中文推荐最相关的视频，说明推荐原因："
+    rewrite_note = f"（查询已改写：{search_query}）" if search_query != question else ""
+
+    # Step 3: 用原始问题生成回答（保留用户意图）
+    prompt = ("用户问："+question+rewrite_note+"\n搜索结果"+mode_note+"：\n"
+              +json.dumps(results,ensure_ascii=False)+"\n用中文推荐最相关视频，说明理由：")
     for text in _stream_llm(prompt, history): yield {"type":"text","text":text}
+
     rows = [[r.get("id",""),r.get("title",""),r.get("author",""),r.get("partition",""),r.get("year",""),round(r.get("score",0)*100,1)] for r in results]
     cols = ["id","标题","作者","分区","年份","相似度(%)"]
     yield {"type":"done","sql":"（RAG"+mode_note+"）","columns":cols,"rows":rows,"total":len(rows),"chart":{"should_chart":False},"agent":"rag_agent"}
+
 
 def _chat_agent_stream(question, history):
     system = "你是B站数据AI分析助手，用中文回答各种问题。"
     for text in _stream_llm(question, history, system=system): yield {"type":"text","text":text}
     yield {"type":"done","sql":"","columns":[],"rows":[],"total":0,"chart":{"should_chart":False},"agent":"chat_agent"}
+
 
 def sql_agent_stream(question: str, session_id: str = ""):
     history = mem.get_history(session_id) if session_id else []

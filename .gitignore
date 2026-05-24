@@ -6,3 +6,6 @@ flask.log
 *.bak
 .env
 __pycache__/
+data/monitor.db
+data/eval_running.flag
+chroma_db/
