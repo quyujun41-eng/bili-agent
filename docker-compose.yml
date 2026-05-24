@@ -8,4 +8,5 @@ services:
       - .env
     volumes:
       - ../bilibili.db:/bilibili.db
+      - ./chroma_db:/app/chroma_db
     restart: unless-stopped

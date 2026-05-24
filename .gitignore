@@ -1,0 +1,8 @@
+
+# 向量库、日志、备份不提交
+chroma_db/
+*.pkl
+flask.log
+*.bak
+.env
+__pycache__/

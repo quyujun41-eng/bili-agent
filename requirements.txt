@@ -5,8 +5,5 @@ langchain
 langchain-anthropic
 langchain-openai
 langchain-core
-faiss-cpu
-fastembed
 numpy
-jieba
-rank-bm25
+chromadb

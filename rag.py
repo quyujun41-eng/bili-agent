@@ -1,78 +1,92 @@
 """
-RAG 模块 —— BM25 + jieba 中文分词语义检索
-无需 API、无需大模型、内存极省，适合中文视频标题搜索
+RAG 模块 —— Chroma 向量数据库 + OpenAI-compatible Embedding API
+首次运行自动构建索引，后续直接查询，内存占用极低
 """
-import os, pickle, sqlite3
-import jieba
-from rank_bm25 import BM25Okapi
+import os, sqlite3, time
+import chromadb
+from chromadb.utils import embedding_functions
 import config
 
-_INDEX_PATH = os.path.join(os.path.dirname(__file__), 'bm25_index.pkl')
+_CHROMA_PATH = os.path.join(os.path.dirname(__file__), 'chroma_db')
+_COLLECTION  = 'bili_videos'
 
-_bm25  = None
-_meta  = None
-
-
-def _tokenize(text: str) -> list:
-    """jieba 分词，过滤单字和空格"""
-    return [w for w in jieba.cut(text) if len(w.strip()) > 1]
+_client     = None
+_collection = None
 
 
-def build_index(force: bool = False):
-    global _bm25, _meta
+def _get_ef():
+    """OpenAI-compatible Embedding Function"""
+    return embedding_functions.OpenAIEmbeddingFunction(
+        api_key    = config.ANTHROPIC_API_KEY,
+        api_base   = config.ANTHROPIC_BASE_URL.rstrip('/') + '/v1'
+                     if not config.ANTHROPIC_BASE_URL.endswith('/v1')
+                     else config.ANTHROPIC_BASE_URL,
+        model_name = 'text-embedding-3-small'
+    )
 
-    if not force and os.path.exists(_INDEX_PATH):
-        with open(_INDEX_PATH, 'rb') as f:
-            data = pickle.load(f)
-        _bm25 = data['bm25']
-        _meta = data['meta']
-        print(f'[RAG] 已加载BM25索引，共 {len(_meta)} 条')
-        return
 
-    print('[RAG] 从数据库读取数据...')
+def _get_collection():
+    global _client, _collection
+    if _collection is not None:
+        return _collection
+    _client = chromadb.PersistentClient(path=_CHROMA_PATH)
+    ef = _get_ef()
+    _collection = _client.get_or_create_collection(
+        name               = _COLLECTION,
+        embedding_function = ef,
+        metadata           = {'hnsw:space': 'cosine'}
+    )
+    if _collection.count() == 0:
+        print('[RAG] 向量库为空，开始构建索引...')
+        _build_index(_collection)
+    else:
+        print(f'[RAG] 已加载向量库，共 {_collection.count()} 条')
+    return _collection
+
+
+def _build_index(col):
+    """从 SQLite 读取数据，批量写入 Chroma"""
     conn = sqlite3.connect(config.DB_PATH)
     cur  = conn.cursor()
     cur.execute('SELECT id, 标题, 简介, 作者, 分区, data_year FROM HuiZong')
     rows = cur.fetchall()
     conn.close()
 
-    corpus, meta_list = [], []
-    for vid_id, title, intro, author, partition, year in rows:
-        intro_str = intro if intro else ''
-        text = f'{title} {intro_str} {author} {partition}'.strip()
-        tokens = _tokenize(text)
-        corpus.append(tokens)
-        meta_list.append({
-            'id': vid_id, 'title': title, 'intro': intro_str,
-            'author': author, 'partition': partition, 'year': year,
-        })
+    BATCH = 200
+    total = len(rows)
+    print(f'[RAG] 共 {total} 条，分批写入（每批 {BATCH}）...')
 
-    print(f'[RAG] 构建BM25索引，共 {len(corpus)} 条...')
-    _bm25 = BM25Okapi(corpus)
-    _meta = meta_list
+    for i in range(0, total, BATCH):
+        batch = rows[i:i+BATCH]
+        ids, docs, metas = [], [], []
+        for vid_id, title, intro, author, partition, year in batch:
+            text = f'{title} {intro or ""} {author} {partition}'.strip()
+            ids.append(str(vid_id))
+            docs.append(text)
+            metas.append({
+                'id'       : int(vid_id),
+                'title'    : title or '',
+                'author'   : author or '',
+                'partition': partition or '',
+                'year'     : int(year) if year else 0
+            })
+        col.add(documents=docs, metadatas=metas, ids=ids)
+        print(f'[RAG] 进度 {min(i+BATCH,total)}/{total}')
+        time.sleep(0.3)   # 限速，避免 API 频控
 
-    with open(_INDEX_PATH, 'wb') as f:
-        pickle.dump({'bm25': _bm25, 'meta': _meta}, f)
-    print(f'[RAG] BM25索引构建完成，共 {len(_meta)} 条')
+    print('[RAG] 索引构建完成！')
 
 
 def search(query: str, top_k: int = 8) -> list:
-    global _bm25, _meta
-    if _bm25 is None:
-        build_index()
-
-    tokens = _tokenize(query)
-    scores = _bm25.get_scores(tokens)
-
-    # 取 top_k 最高分
-    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-
-    results = []
-    for idx in top_indices:
-        if scores[idx] <= 0:
-            continue
-        item = dict(_meta[idx])
-        item['score'] = round(float(scores[idx]), 4)
-        results.append(item)
-
-    return results
+    col = _get_collection()
+    results = col.query(
+        query_texts = [query],
+        n_results   = min(top_k, col.count()),
+        include     = ['metadatas', 'distances']
+    )
+    output = []
+    for meta, dist in zip(results['metadatas'][0], results['distances'][0]):
+        item = dict(meta)
+        item['score'] = round(1 - dist, 4)   # cosine distance → similarity
+        output.append(item)
+    return output
