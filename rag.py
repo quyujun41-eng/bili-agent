@@ -206,3 +206,17 @@ def search(query: str, top_k: int = 8) -> list:
         output.append(meta)
 
     return output
+
+
+def search_vector_only(query: str, top_k: int = 8) -> list:
+    col   = _get_collection()
+    count = col.count()
+    if count == 0:
+        return []
+    vec_res = col.query(query_texts=[query], n_results=min(top_k, count), include=['metadatas','distances'])
+    output  = []
+    for vid, meta, dist in zip(vec_res['ids'][0], vec_res['metadatas'][0], vec_res['distances'][0]):
+        item = dict(meta)
+        item['score'] = round(1 - dist, 4)
+        output.append(item)
+    return output

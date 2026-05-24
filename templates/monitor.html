@@ -1,0 +1,72 @@
+<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"/><title>Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:-apple-system,sans-serif;background:#f0f2f8;color:#111827}.hd{background:#111827;color:#fff;padding:16px 28px;display:flex;align-items:center;gap:12px}.hd h1{font-size:16px;font-weight:700}.hd a{color:rgba(255,255,255,.5);font-size:13px;text-decoration:none;margin-left:auto}.wrap{max-width:1100px;margin:0 auto;padding:24px 20px}.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}.card{background:#fff;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,.06)}.card-val{font-size:28px;font-weight:700;color:#6366f1;margin-bottom:4px}.card-lab{font-size:12px;color:#6b7280}.row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:22px}.panel{background:#fff;border-radius:12px;padding:18px 20px;box-shadow:0 1px 4px rgba(0,0,0,.06)}.panel h2{font-size:13px;font-weight:600;color:#374151;margin-bottom:14px;padding-bottom:8px;border-bottom:1px solid #f3f4f6}.chart{height:220px}table{width:100%;border-collapse:collapse;font-size:12.5px}th{text-align:left;padding:7px 10px;background:#f9fafb;color:#6b7280;font-weight:500;border-bottom:1px solid #e5e7eb}td{padding:7px 10px;border-bottom:1px solid #f3f4f6;color:#374151}.tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}.tag.sql_agent{background:#d1fae5;color:#065f46}.tag.rag_agent{background:#dbeafe;color:#1e40af}.tag.chat_agent{background:#fce7f3;color:#9d174d}.tag.err{background:#fee2e2;color:#991b1b}.eb{background:linear-gradient(135deg,#6366f1,#8b5cf6);border-radius:12px;padding:20px 24px;color:#fff;display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin-bottom:22px}.em{text-align:center;min-width:90px}.em .v{font-size:22px;font-weight:800}.em .l{font-size:11px;opacity:.8;margin-top:2px}.rb{margin-left:auto;padding:9px 20px;background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.4);border-radius:8px;color:#fff;cursor:pointer;font-size:13px}.rb:hover{background:rgba(255,255,255,.3)}.rb:disabled{opacity:.5;cursor:not-allowed}.sr{display:flex;align-items:center;gap:8px;color:rgba(255,255,255,.8);font-size:13px}.sp{width:16px;height:16px;border:2px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite}@keyframes s{to{transform:rotate(360deg)}}</style></head>
+<body>
+<div class="hd"><span>&#x1F4CA;</span><h1>&#x8FD0;&#x884C;&#x76D1;&#x63A7; &amp; &#x8BC4;&#x6D4B;</h1><a href="/">&#x2190; &#x8FD4;&#x56DE;&#x5BF9;&#x8BDD;</a></div>
+<div class="wrap">
+<div class="cards">
+  <div class="card"><div class="card-val" id="ct">-</div><div class="card-lab">&#x603B;&#x8BF7;&#x6C42;&#x6570;</div></div>
+  <div class="card"><div class="card-val" id="cd">-</div><div class="card-lab">&#x4ECA;&#x65E5;&#x8BF7;&#x6C42;</div></div>
+  <div class="card"><div class="card-val" id="ce">-</div><div class="card-lab">&#x9519;&#x8BEF;&#x7387;</div></div>
+  <div class="card"><div class="card-val" id="cm">-</div><div class="card-lab">&#x5E73;&#x5747;&#x54CD;&#x5E94;(ms)</div></div>
+</div>
+<div class="row2">
+  <div class="panel"><h2>Agent &#x8DEF;&#x7531;&#x5206;&#x5E03;</h2><div class="chart" id="ca"></div></div>
+  <div class="panel"><h2>&#x5E73;&#x5747;&#x54CD;&#x5E94;&#x65F6;&#x95F4; (ms)</h2><div class="chart" id="ct2"></div></div>
+</div>
+<div class="eb">
+  <div id="ep" style="color:rgba(255,255,255,.7)">&#x8BC4;&#x6D4B;&#x5C1A;&#x672A;&#x8FD0;&#x884C; &mdash; &#x70B9;&#x51FB;&#x6309;&#x9215;&#x5F00;&#x59CB;</div>
+  <div id="er" style="display:none" class="sr"><div class="sp"></div>&#x8BC4;&#x6D4B;&#x8FD0;&#x884C;&#x4E2D;...</div>
+  <div id="em" style="display:none;gap:20px;align-items:center;flex-wrap:wrap"></div>
+  <button class="rb" id="rb" onclick="runEval()">&#x25B6; &#x8FD0;&#x884C;&#x8BC4;&#x6D4B;</button>
+</div>
+<div class="panel">
+  <h2>&#x6700;&#x8FD1;&#x8BF7;&#x6C42;&#x8BB0;&#x5F55;</h2>
+  <table><thead><tr><th>&#x95EE;&#x9898;</th><th>Agent</th><th>&#x8017;&#x65F6;(ms)</th><th>&#x72B6;&#x6001;</th><th>&#x65F6;&#x95F4;</th></tr></thead>
+  <tbody id="tb"></tbody></table>
+</div></div>
+<script>
+var N={sql_agent:'SQL&#x67E5;&#x8BE2;',rag_agent:'RAG&#x641C;&#x7D22;',chat_agent:'&#x5BF9;&#x8BDD;'};
+var C={sql_agent:'#34d399',rag_agent:'#60a5fa',chat_agent:'#f472b6'};
+var agC,tmC;
+function init(){agC=echarts.init(document.getElementById('ca'));tmC=echarts.init(document.getElementById('ct2'));}
+function refresh(){
+  fetch('/api/monitor/stats').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('ct').textContent=d.total||0;
+    document.getElementById('cd').textContent=d.today||0;
+    document.getElementById('ce').textContent=(d.error_rate||0)+'%';
+    document.getElementById('cm').textContent=d.avg_ms||0;
+    var ag=d.agents||[];
+    agC.setOption({tooltip:{trigger:'item'},series:[{type:'pie',radius:['40%','70%'],data:ag.map(function(a){return{name:N[a.name]||a.name,value:a.count,itemStyle:{color:C[a.name]||'#aaa'}};}),label:{formatter:'{b}: {c}'}}]});
+    var tm=d.timing||[];
+    tmC.setOption({tooltip:{trigger:'axis'},xAxis:{type:'category',data:tm.map(function(t){return N[t.agent]||t.agent;})},yAxis:{type:'value'},series:[{type:'bar',data:tm.map(function(t){return t.avg_ms;}),itemStyle:{color:'#6366f1'},barMaxWidth:60,label:{show:true,position:'top'}}]});
+    document.getElementById('tb').innerHTML=(d.recent||[]).map(function(r){return '<tr><td>'+r.q+'</td><td><span class="tag '+r.agent+'">'+(N[r.agent]||r.agent||'-')+'</span></td><td>'+r.ms+'</td><td>'+(r.err?'<span class="tag err">&#x9519;&#x8BEF;</span>':'OK')+'</td><td style="color:#9ca3af">'+r.time+'</td></tr>';}).join('');
+  });
+}
+function refreshEval(){
+  fetch('/api/eval/results').then(function(r){return r.json();}).then(function(d){
+    if(d.status!=='done'||!d.summary)return;
+    var s=d.summary;
+    document.getElementById('ep').style.display='none';
+    document.getElementById('er').style.display='none';
+    var em=document.getElementById('em');
+    em.style.display='flex';
+    var items=[{v:s.hybrid_avg_top1,l:'&#x6DF7;&#x5408;&#x5747;&#x5206;'},{v:s.vector_avg_top1,l:'&#x7EAF;&#x5411;&#x91CF;&#x5747;&#x5206;'},{v:(s.score_lift_pct>=0?'+':'')+s.score_lift_pct+'%',l:'&#x8BED;&#x4E49;&#x5206;&#x63D0;&#x5347;'},{v:s.bm25_avg_added,l:'BM25&#x8865;&#x5145;&#x6570;'},{v:s.sql_success_rate+'%',l:'SQL&#x6210;&#x529F;&#x7387;'}];
+    em.innerHTML=items.map(function(m){return '<div class="em"><div class="v">'+m.v+'</div><div class="l">'+m.l+'</div></div>';}).join('');
+  });
+}
+function runEval(){
+  document.getElementById('rb').disabled=true;
+  document.getElementById('ep').style.display='none';
+  document.getElementById('em').style.display='none';
+  document.getElementById('er').style.display='flex';
+  fetch('/api/eval/run',{method:'POST'}).then(function(){
+    var t=setInterval(function(){
+      fetch('/api/eval/results').then(function(r){return r.json();}).then(function(d){
+        if(d.status==='done'){clearInterval(t);document.getElementById('rb').disabled=false;refreshEval();}
+      });
+    },6000);
+  });
+}
+init();refresh();refreshEval();setInterval(refresh,10000);
+</script></body></html>
