@@ -141,6 +141,7 @@ def sql_agent_stream(question: str, session_id: str = ""):
         if chunk["type"] == "text": answer_text += chunk["text"]
         elif chunk["type"] == "done": final_done = chunk
         elif chunk["type"] == "error":
+            yield chunk  # 先把 error 推给前端
             had_error = True
             fallback = ag.route(question, history, error=chunk["error"])
             yield {"type":"agent","agent":fallback}

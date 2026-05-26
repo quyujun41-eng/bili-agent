@@ -9,3 +9,6 @@ __pycache__/
 data/monitor.db
 data/eval_running.flag
 chroma_db/
+data/app.log
+data/eval_results.json
+data/eval_running.flag
