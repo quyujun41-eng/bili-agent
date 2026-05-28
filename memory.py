@@ -1,62 +1,125 @@
 """
-会话记忆模块 —— 基于 session_id 的多轮对话历史
-每个会话最多保留最近 MAX_TURNS 轮，超时自动过期
+memory.py —— 会话历史管理（Redis 存储，内存兜底）
+
+• 优先写 Redis（TTL 2h）
+• Redis 不可用时自动降级为进程内 dict（不跨进程）
+• 会话历史格式：[{"role": "user"|"assistant", "content": "..."}, ...]
 """
+import json
 import time
-from threading import Lock
-from collections import defaultdict
+import logging
+from typing import Optional
 
-MAX_TURNS   = 6      # 每个 session 保留最近 6 轮（12条消息）
-SESSION_TTL = 3600   # 1小时无活动则过期
+import config
 
-_sessions: dict = defaultdict(lambda: {'turns': [], 'ts': time.time()})
-_lock = Lock()
+logger = logging.getLogger(__name__)
 
+# ── 配置 ──────────────────────────────────────────────────────────────────────
+_SESSION_TTL  = 7200        # Redis key 过期时间（秒），2h
+_MAX_TURNS    = 20          # 每个会话最多保留多少轮对话
 
-def get_history(session_id: str) -> list:
-    """返回当前会话的对话历史（OpenAI message 格式）"""
-    with _lock:
-        s = _sessions[session_id]
-        s['ts'] = time.time()
-        return list(s['turns'])
+# ── 降级：进程内 fallback ──────────────────────────────────────────────────────
+_mem_store: dict[str, list] = {}
 
+# ── Redis 客户端（懒加载）──────────────────────────────────────────────────────
+_redis = None
+_redis_ok = True   # 如果连续失败则置 False，停止尝试
 
-def add_turn(session_id: str, question: str, answer: str):
-    """追加一轮 user/assistant 对话到会话历史"""
-    with _lock:
-        turns = _sessions[session_id]['turns']
-        turns.append({'role': 'user',      'content': question})
-        turns.append({'role': 'assistant', 'content': answer})
-        # 超出上限时从头裁剪（保持偶数对）
-        if len(turns) > MAX_TURNS * 2:
-            _sessions[session_id]['turns'] = turns[-(MAX_TURNS * 2):]
-        _sessions[session_id]['ts'] = time.time()
-
-
-def clear_session(session_id: str):
-    """清空指定会话的历史（用于"新对话"按钮）"""
-    with _lock:
-        _sessions.pop(session_id, None)
-
-
-def cleanup_expired() -> int:
-    """清除过期会话，返回清除数量（可定期调用）"""
-    now = time.time()
-    with _lock:
-        expired = [sid for sid, s in _sessions.items()
-                   if now - s['ts'] > SESSION_TTL]
-        for sid in expired:
-            del _sessions[sid]
-    return len(expired)
+def _get_redis():
+    global _redis, _redis_ok
+    if not _redis_ok:
+        return None
+    if _redis is None:
+        try:
+            import redis as _r
+            _redis = _r.from_url(
+                config.REDIS_URL,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=2,
+            )
+            _redis.ping()
+            logger.info("Memory: Redis 连接成功")
+        except Exception as e:
+            logger.warning(f"Memory: Redis 不可用，降级到内存: {e}")
+            _redis_ok = False
+            _redis = None
+    return _redis
 
 
-def session_info(session_id: str) -> dict:
-    """返回会话摘要信息"""
-    with _lock:
-        s = _sessions.get(session_id)
-        if not s:
-            return {'turns': 0, 'age_sec': 0}
-        return {
-            'turns':   len(s['turns']) // 2,
-            'age_sec': int(time.time() - s['ts'])
-        }
+def _redis_key(session_id: str) -> str:
+    return f"session:{session_id}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 对外接口
+# ══════════════════════════════════════════════════════════════════════════════
+
+def get_history(session_id: str) -> list[dict]:
+    """获取会话历史，返回 [{"role": ..., "content": ...}, ...]"""
+    if not session_id:
+        return []
+    r = _get_redis()
+    if r is not None:
+        try:
+            raw = r.get(_redis_key(session_id))
+            if raw:
+                return json.loads(raw)
+            return []
+        except Exception as e:
+            logger.warning(f"Redis get_history 失败: {e}")
+
+    # 降级
+    return list(_mem_store.get(session_id, []))
+
+
+def add_turn(session_id: str, question: str, answer: str) -> None:
+    """追加一轮对话到历史"""
+    if not session_id:
+        return
+
+    history = get_history(session_id)
+    history.append({"role": "user",      "content": question})
+    history.append({"role": "assistant", "content": answer})
+
+    # 超出最大轮数时截断最旧的
+    if len(history) > _MAX_TURNS * 2:
+        history = history[-(  _MAX_TURNS * 2):]
+
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.setex(_redis_key(session_id), _SESSION_TTL, json.dumps(history, ensure_ascii=False))
+            return
+        except Exception as e:
+            logger.warning(f"Redis add_turn 失败，降级内存: {e}")
+
+    # 降级
+    _mem_store[session_id] = history
+
+
+def clear_session(session_id: str) -> None:
+    """清空指定会话历史"""
+    if not session_id:
+        return
+    r = _get_redis()
+    if r is not None:
+        try:
+            r.delete(_redis_key(session_id))
+            return
+        except Exception as e:
+            logger.warning(f"Redis clear_session 失败: {e}")
+
+    _mem_store.pop(session_id, None)
+
+
+def ping() -> bool:
+    """检查 Redis 是否可用（健康检查用）"""
+    r = _get_redis()
+    if r is None:
+        return False
+    try:
+        r.ping()
+        return True
+    except Exception:
+        return False

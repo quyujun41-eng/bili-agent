@@ -13,7 +13,7 @@ import memory as mem
 import monitor as mon
 from logger import app_log
 
-app = FastAPI(title="B站AI数据分析", version="2.0.0", docs_url="/docs")
+app = FastAPI(title="B站AI数据分析", version="3.0.0", docs_url="/docs")
 templates = Jinja2Templates(directory="templates")
 _pool = ThreadPoolExecutor(max_workers=16)
 
@@ -24,7 +24,6 @@ _RATE_LIMIT  = 20
 _RATE_WINDOW = 60.0
 
 def _check_rate(ip: str) -> None:
-    """超限抛 429，否则记录本次请求时间戳"""
     now    = time.time()
     bucket = [t for t in _rate_buckets[ip] if now - t < _RATE_WINDOW]
     _rate_buckets[ip] = bucket
@@ -195,13 +194,35 @@ async def eval_run():
     return {"status": "started"}
 
 
-# ── 健康检查 ────────────────────────────────────────────────────────────────────
+# ── 健康检查（含依赖探活）───────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
-    return {"status": "ok", "version": app.version}
+    import rag as _rag
+
+    # Qdrant
+    try:
+        qdrant_count = _rag.get_collection_count()
+        qdrant_ok    = qdrant_count >= 0
+    except Exception:
+        qdrant_ok    = False
+        qdrant_count = -1
+
+    # Redis
+    redis_ok = mem.ping()
+
+    status = "ok" if (qdrant_ok and redis_ok) else "degraded"
+    return {
+        "status":  status,
+        "version": app.version,
+        "deps": {
+            "qdrant": {"ok": qdrant_ok, "vectors": qdrant_count},
+            "redis":  {"ok": redis_ok},
+        },
+    }
 
 
 # ── 启动事件 ────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def on_startup():
     app_log.info(f"B站AI分析服务已启动 version={app.version} | ASGI/uvicorn")
+    app_log.info(f"LLM={config.LLM_PROVIDER} Qdrant={config.QDRANT_URL} Redis={config.REDIS_URL}")

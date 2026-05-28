@@ -20,9 +20,11 @@ class AgentState(TypedDict):
 _ROUTE_SYSTEM = (
     "你是智能路由器，判断用户问题应由哪个Agent处理。\n"
     "可用Agent：\n"
-    "- sql_agent：排行榜、统计数字、播放量/收藏量对比、分区数量等精确查询\n"
-    "- rag_agent：推荐视频、找相关内容、语义搜索、'有没有关于XX的视频'\n"
-    "- chat_agent：闲聊、解释概念、问候、与数据库无关的对话\n"
+    "- sql_agent：凡涉及【最高/最低/最多/最少/排名/TOP/数量/平均/统计/对比/增长】的问题，\n"
+    "  即使带有分区或类别筛选词（如'美食分区点赞最高'、'游戏区播放量最多'），一律走 sql_agent\n"
+    "- rag_agent：语义推荐、找相似视频、模糊描述（'推荐一些XX'、'有没有关于XX的视频'）\n"
+    "- chat_agent：闲聊、概念解释、问候、与数据查询无关的对话\n"
+    "【关键规则】问题中含排序/数值比较/统计意图时，优先选 sql_agent，即使带有类别词。\n"
     "结合对话历史理解追问意图。只输出Agent名称，不要其他文字。"
 )
 
@@ -42,9 +44,9 @@ def router_node(state: AgentState) -> AgentState:
         {'role': 'user', 'content': state['question']}
     ]
     resp = client.chat.completions.create(
-        model    = get_model(),
+        model      = get_model(),
         max_tokens = 20,
-        messages = [{'role': 'system', 'content': _ROUTE_SYSTEM}] + messages
+        messages   = [{'role': 'system', 'content': _ROUTE_SYSTEM}] + messages
     )
     raw = resp.choices[0].message.content.strip().lower()
 

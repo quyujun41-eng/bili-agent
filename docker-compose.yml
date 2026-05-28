@@ -1,12 +1,76 @@
+version: "3.9"
+
 services:
-  bili-agent:
-    build: .
-    container_name: bili-agent
+  # ── Qdrant 向量数据库 ────────────────────────────────────────────────────────
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: bili-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      QDRANT__SERVICE__GRPC_PORT: "6334"
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null && exit 0 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── Redis 缓存 & 会话存储 ─────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: bili-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --save 60 1
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # ── 应用服务 ─────────────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bili-app
+    restart: unless-stopped
     ports:
       - "5001:5001"
+    volumes:
+      - ./data:/app/data
+      - /home/ubuntu/my-python-project/bilibili.db:/app/../bilibili.db:ro
     env_file:
       - .env
-    volumes:
-      - ../bilibili.db:/bilibili.db
-      - ./chroma_db:/app/chroma_db
-    restart: unless-stopped
+    environment:
+      QDRANT_URL: "http://qdrant:6333"
+      REDIS_URL: "redis://redis:6379/0"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  qdrant_data:
+  redis_data:

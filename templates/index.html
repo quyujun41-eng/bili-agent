@@ -336,7 +336,7 @@ body {
   <div class="logo">
     <div class="logo-icon">🎬</div>
     <h1>B站 AI 数据分析</h1>
-    <p>18,023 条视频 · 多 Agent 架构</p>
+    <p><span id="video-count">--</span> 条视频 · 多 Agent 架构</p>
   </div>
 
   <div class="nav-section">
@@ -668,6 +668,13 @@ function escHtml(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+</script>
+
+<script>
+fetch('/api/db/count').then(r=>r.json()).then(d=>{
+  const el = document.getElementById('video-count');
+  if(el) el.textContent = d.count.toLocaleString();
+});
 </script>
 </body>
 </html>

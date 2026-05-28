@@ -1,222 +1,438 @@
 """
-RAG 模块 —— 混合检索：Chroma 向量搜索 + BM25 关键词搜索 + RRF 融合
-Chroma：首次运行自动构建索引（调用 Embedding API），持久化存储
-BM25：每次启动后台线程预热，无需 API，纯内存计算
+rag.py —— 混合检索模块（Qdrant + BM25 + RRF + Cohere Rerank）
+
+架构：
+  1. 查询向量化（sentence-transformers，带 Redis 缓存）
+  2. Qdrant 语义检索（HNSW，带 metadata 过滤）
+  3. BM25 关键字检索（rank-bm25 + jieba 分词）
+  4. RRF 融合两路结果
+  5. Cohere Rerank API 精排（可选）
+  6. 返回 top-k 结果
 """
-import os, sqlite3, time, threading
-from collections import defaultdict
-import chromadb
-from chromadb.utils import embedding_functions
+import hashlib, json, time, logging, threading
+from typing import Optional
+
+import numpy as np
+
 import config
 
-# 延迟导入（BM25 依赖较重）
-_bm25_module = None
-_jieba_module = None
+logger = logging.getLogger(__name__)
 
-_CHROMA_PATH = os.path.join(os.path.dirname(__file__), 'chroma_db')
-_COLLECTION  = 'bili_videos'
-
-# Chroma 相关
-_client     = None
-_collection = None
-_chroma_lock = threading.Lock()
-
-# BM25 相关
-_bm25       = None
-_bm25_ids   = []    # 与 corpus 对应的文档 ID（str）
-_bm25_metas = {}    # str(id) → metadata dict
-_bm25_ready = False
-_bm25_lock  = threading.Lock()
+# ── 全局单例（懒加载）────────────────────────────────────────────────────────
+_qdrant_client  = None
+_embed_model    = None
+_redis_client   = None
+_cohere_client  = None
+_bm25_index     = None
+_bm25_docs      = []        # [{id, title, author, partition, year}, ...]
+_bm25_ready     = False
+_lock           = threading.Lock()
 
 
-# ── 工具函数 ──────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# 内部：客户端初始化
+# ══════════════════════════════════════════════════════════════════════════════
 
-def _get_ef():
-    api_base = config.ANTHROPIC_BASE_URL.rstrip('/')
-    if not api_base.endswith('/v1'):
-        api_base += '/v1'
-    return embedding_functions.OpenAIEmbeddingFunction(
-        api_key    = config.ANTHROPIC_API_KEY,
-        api_base   = api_base,
-        model_name = 'text-embedding-3-small'
-    )
-
-
-def _load_rows():
-    """从 SQLite 读取所有视频行"""
-    uri  = f'file:{config.DB_PATH}?mode=ro'
-    conn = sqlite3.connect(uri, uri=True)
-    cur  = conn.cursor()
-    cur.execute('SELECT id, 标题, 简介, 作者, 分区, data_year FROM HuiZong')
-    rows = cur.fetchall()
-    conn.close()
-    return rows
+def _get_qdrant():
+    global _qdrant_client
+    if _qdrant_client is None:
+        from qdrant_client import QdrantClient
+        _qdrant_client = QdrantClient(url=config.QDRANT_URL, timeout=10)
+    return _qdrant_client
 
 
-# ── Chroma 初始化 ─────────────────────────────────────────────────────────────
-
-def _get_collection():
-    global _client, _collection
-    with _chroma_lock:
-        if _collection is not None:
-            return _collection
-        _client = chromadb.PersistentClient(path=_CHROMA_PATH)
-        ef = _get_ef()
-        _collection = _client.get_or_create_collection(
-            name               = _COLLECTION,
-            embedding_function = ef,
-            metadata           = {'hnsw:space': 'cosine'}
-        )
-        if _collection.count() == 0:
-            print('[RAG] Chroma 索引为空，开始构建（首次约3-5分钟）...')
-            _build_chroma_index()
-        else:
-            print(f'[RAG] Chroma 已加载，共 {_collection.count()} 条')
-        return _collection
+def _get_embed_model():
+    global _embed_model
+    if _embed_model is None:
+        from sentence_transformers import SentenceTransformer
+        _embed_model = SentenceTransformer(config.EMBED_MODEL)
+    return _embed_model
 
 
-def _build_chroma_index():
-    rows  = _load_rows()
-    BATCH = 200
-    total = len(rows)
-    print(f'[RAG] 共 {total} 条，每批 {BATCH} 写入 Chroma...')
-    for i in range(0, total, BATCH):
-        batch      = rows[i:i+BATCH]
-        ids, docs, metas = [], [], []
-        for vid_id, title, intro, author, partition, year in batch:
-            text = f'{title} {intro or ""} {author} {partition}'.strip()
-            ids.append(str(vid_id))
-            docs.append(text)
-            metas.append({
-                'id'       : int(vid_id),
-                'title'    : title or '',
-                'author'   : author or '',
-                'partition': partition or '',
-                'year'     : int(year) if year else 0,
-            })
-        _collection.add(documents=docs, metadatas=metas, ids=ids)
-        print(f'[RAG] Chroma {min(i+BATCH, total)}/{total}')
-        time.sleep(0.3)
-    print('[RAG] Chroma 索引构建完成！')
+def _get_redis():
+    global _redis_client
+    if _redis_client is None:
+        try:
+            import redis as _redis
+            _redis_client = _redis.from_url(
+                config.REDIS_URL,
+                decode_responses=False,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+            )
+            _redis_client.ping()
+        except Exception as e:
+            logger.warning(f"Redis 不可用，Embedding 缓存关闭: {e}")
+            _redis_client = None
+    return _redis_client
 
 
-# ── BM25 初始化（后台线程预热）────────────────────────────────────────────────
+def _get_cohere():
+    global _cohere_client
+    if _cohere_client is None and config.COHERE_API_KEY:
+        import cohere
+        _cohere_client = cohere.Client(config.COHERE_API_KEY)
+    return _cohere_client
 
-def _init_bm25():
-    global _bm25, _bm25_ids, _bm25_metas, _bm25_ready, _bm25_module, _jieba_module
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Embedding（带 Redis 缓存）
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _embed(text: str) -> list[float]:
+    """单条文本向量化，Redis 缓存 24h"""
+    key = "emb:" + hashlib.md5(text.encode()).hexdigest()
+    r = _get_redis()
+    if r is not None:
+        try:
+            cached = r.get(key)
+            if cached:
+                return json.loads(cached)
+        except Exception:
+            pass
+
+    vec = _get_embed_model().encode(text, normalize_embeddings=True).tolist()
+
+    if r is not None:
+        try:
+            r.setex(key, config.EMBED_CACHE_TTL, json.dumps(vec))
+        except Exception:
+            pass
+    return vec
+
+
+def _embed_batch(texts: list[str]) -> list[list[float]]:
+    """批量向量化（建索引用），不走 Redis 缓存"""
+    model = _get_embed_model()
+    vecs = model.encode(texts, normalize_embeddings=True, batch_size=64, show_progress_bar=True)
+    return vecs.tolist()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 文本分块
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _chunk_text(text: str, chunk_size: int = 300, overlap: int = 50) -> list[str]:
+    """按字符数分块，带 overlap"""
+    if not text or len(text) <= chunk_size:
+        return [text] if text else []
+    chunks, start = [], 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Qdrant Collection 初始化 & 索引构建
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _ensure_collection() -> bool:
+    """确保 Qdrant collection 存在，不存在则创建"""
+    from qdrant_client.models import Distance, VectorParams
+    client = _get_qdrant()
     try:
-        import jieba
-        from rank_bm25 import BM25Okapi
-        _bm25_module  = BM25Okapi
-        _jieba_module = jieba
-        jieba.setLogLevel('WARNING')
+        existing = [c.name for c in client.get_collections().collections]
+        if config.QDRANT_COLLECTION not in existing:
+            dim = len(_embed("测试"))
+            client.create_collection(
+                collection_name=config.QDRANT_COLLECTION,
+                vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+            )
+            logger.info(f"已创建 Qdrant collection: {config.QDRANT_COLLECTION} dim={dim}")
+            return False   # 需要重建索引
+        return True
+    except Exception as e:
+        logger.error(f"Qdrant collection 初始化失败: {e}")
+        raise
 
-        rows   = _load_rows()
-        corpus = []
-        for vid_id, title, intro, author, partition, year in rows:
-            text   = f'{title} {intro or ""} {author} {partition}'.strip()
+
+def _build_qdrant_index():
+    """从 SQLite 读取数据，构建 Qdrant 向量索引"""
+    import sqlite3
+    from qdrant_client.models import PointStruct
+
+    client = _get_qdrant()
+    db_path = config.DB_PATH
+    logger.info(f"开始构建 Qdrant 索引，数据库: {db_path}")
+
+    conn = sqlite3.connect(db_path)
+    rows = conn.execute(
+        "SELECT id, title, author, partition, year, description FROM HuiZong"
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        logger.warning("数据库为空，跳过索引构建")
+        return
+
+    points = []
+    texts  = []
+    metas  = []
+
+    for row in rows:
+        vid, title, author, partition, year, description = row
+        # 用于检索的文本 = 标题 + 描述（截断）
+        search_text = title or ""
+        if description:
+            search_text += " " + description[:200]
+        texts.append(search_text.strip())
+        metas.append({
+            "id": int(vid),
+            "title": title or "",
+            "author": author or "",
+            "partition": partition or "",
+            "year": int(year) if year else 0,
+        })
+
+    logger.info(f"向量化 {len(texts)} 条数据...")
+    vecs = _embed_batch(texts)
+
+    for i, (vec, meta) in enumerate(zip(vecs, metas)):
+        points.append(PointStruct(id=meta["id"], vector=vec, payload=meta))
+        if len(points) >= 500:
+            client.upsert(collection_name=config.QDRANT_COLLECTION, points=points)
+            logger.info(f"  已上传 {i+1}/{len(texts)}")
+            points = []
+
+    if points:
+        client.upsert(collection_name=config.QDRANT_COLLECTION, points=points)
+
+    logger.info(f"Qdrant 索引构建完成，共 {len(texts)} 条")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BM25 索引构建（后台线程）
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_bm25_index():
+    global _bm25_index, _bm25_docs, _bm25_ready
+    try:
+        import sqlite3, jieba
+        from rank_bm25 import BM25Okapi
+
+        conn = sqlite3.connect(config.DB_PATH)
+        rows = conn.execute(
+            "SELECT id, title, author, partition, year FROM HuiZong"
+        ).fetchall()
+        conn.close()
+
+        if not rows:
+            return
+
+        docs, corpus = [], []
+        for vid, title, author, partition, year in rows:
+            text = f"{title or ''} {partition or ''}"
             tokens = list(jieba.cut(text))
             corpus.append(tokens)
-            sid = str(vid_id)
-            _bm25_ids.append(sid)
-            _bm25_metas[sid] = {
-                'id'       : int(vid_id),
-                'title'    : title or '',
-                'author'   : author or '',
-                'partition': partition or '',
-                'year'     : int(year) if year else 0,
-            }
-        with _bm25_lock:
-            _bm25 = BM25Okapi(corpus)
-            _bm25_ready = True
-        print(f'[RAG] BM25 索引完成，共 {len(corpus)} 条')
+            docs.append({
+                "id": int(vid),
+                "title": title or "",
+                "author": author or "",
+                "partition": partition or "",
+                "year": int(year) if year else 0,
+            })
+
+        _bm25_index = BM25Okapi(corpus)
+        _bm25_docs  = docs
+        _bm25_ready = True
+        logger.info(f"BM25 索引就绪，共 {len(docs)} 条")
     except Exception as e:
-        print(f'[RAG] BM25 初始化失败（仅降级到纯向量搜索）: {e}')
+        logger.warning(f"BM25 索引构建失败: {e}")
 
 
-# 应用启动时后台预热 BM25
-threading.Thread(target=_init_bm25, daemon=True, name='bm25-warmup').start()
+def _init_background():
+    """应用启动时后台初始化：确保 Qdrant collection 存在 + BM25"""
+    def _run():
+        try:
+            already_exists = _ensure_collection()
+            if not already_exists:
+                _build_qdrant_index()
+        except Exception as e:
+            logger.error(f"Qdrant 初始化失败: {e}")
+        _build_bm25_index()
+
+    t = threading.Thread(target=_run, daemon=True, name="rag-init")
+    t.start()
 
 
-# ── RRF 融合 ──────────────────────────────────────────────────────────────────
+# 模块加载时启动后台初始化
+_init_background()
 
-def _rrf(ranked_lists: list, k: int = 60) -> list:
-    """Reciprocal Rank Fusion：合并多路召回结果"""
-    scores: dict = defaultdict(float)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 核心检索函数
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _qdrant_search(
+    query: str,
+    top_k: int = 20,
+    year_filter: Optional[int] = None,
+    partition_filter: Optional[str] = None,
+) -> list[dict]:
+    """Qdrant 语义检索，支持 metadata 过滤"""
+    from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+
+    client = _get_qdrant()
+    vec = _embed(query)
+
+    # 构造过滤条件
+    must = []
+    if year_filter:
+        must.append(FieldCondition(key="year", range=Range(gte=year_filter)))
+    if partition_filter:
+        must.append(FieldCondition(
+            key="partition",
+            match=MatchValue(value=partition_filter)
+        ))
+    filt = Filter(must=must) if must else None
+
+    try:
+        hits = client.search(
+            collection_name=config.QDRANT_COLLECTION,
+            query_vector=vec,
+            limit=top_k,
+            query_filter=filt,
+            with_payload=True,
+        )
+        return [
+            {"id": str(h.payload["id"]), "score": h.score, **h.payload}
+            for h in hits
+        ]
+    except Exception as e:
+        logger.warning(f"Qdrant 检索失败: {e}")
+        return []
+
+
+def _bm25_search(query: str, top_k: int = 20) -> list[dict]:
+    """BM25 关键字检索"""
+    if not _bm25_ready:
+        return []
+    import jieba
+    tokens = list(jieba.cut(query))
+    scores = _bm25_index.get_scores(tokens)
+    top_idx = np.argsort(scores)[::-1][:top_k]
+    results = []
+    for i in top_idx:
+        if scores[i] > 0:
+            results.append({
+                "id": str(_bm25_docs[i]["id"]),
+                "score": float(scores[i]),
+                **_bm25_docs[i],
+            })
+    return results
+
+
+def _rrf(
+    ranked_lists: list[list[str]],
+    k: int = 60
+) -> list[tuple[str, float]]:
+    """Reciprocal Rank Fusion（RRF）融合多路排名"""
+    scores: dict[str, float] = {}
     for ranked in ranked_lists:
         for rank, doc_id in enumerate(ranked):
-            scores[str(doc_id)] += 1.0 / (k + rank + 1)
-    return sorted(scores.items(), key=lambda x: -x[1])
+            scores[doc_id] = scores.get(doc_id, 0.0) + 1.0 / (k + rank + 1)
+    return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
 
-# ── 对外检索接口 ───────────────────────────────────────────────────────────────
+def _rerank(query: str, docs: list[dict], top_k: int) -> list[dict]:
+    """Cohere Rerank API 精排（如果未配置 API Key 则跳过）"""
+    co = _get_cohere()
+    if co is None or not docs:
+        return docs[:top_k]
+    try:
+        texts = [d.get("title", "") for d in docs]
+        resp = co.rerank(
+            model=config.COHERE_RERANK_MODEL,
+            query=query,
+            documents=texts,
+            top_n=top_k,
+        )
+        reranked = []
+        for r in resp.results:
+            d = dict(docs[r.index])
+            d["rerank_score"] = r.relevance_score
+            reranked.append(d)
+        return reranked
+    except Exception as e:
+        logger.warning(f"Cohere Rerank 失败，降级为 RRF 排序: {e}")
+        return docs[:top_k]
 
-def search(query: str, top_k: int = 8) -> list:
+
+# ══════════════════════════════════════════════════════════════════════════════
+# 对外接口
+# ══════════════════════════════════════════════════════════════════════════════
+
+def search(
+    query: str,
+    top_k: int = 10,
+    year_filter: Optional[int] = None,
+    partition_filter: Optional[str] = None,
+) -> list[dict]:
     """
-    混合检索：Chroma（语义）+ BM25（关键词）→ RRF 融合 → top_k 结果
-    若 BM25 尚未就绪，仅使用 Chroma 语义搜索（降级）。
+    混合检索主入口：Qdrant + BM25 → RRF → Cohere Rerank
+    返回格式：[{id, title, author, partition, year, score, hybrid, rerank_score?}, ...]
     """
-    RECALL = 20
-
-    # ── 1. Chroma 向量召回 ─────────────────────────────────────────────────────
-    col   = _get_collection()
-    count = col.count()
-    if count == 0:
-        return []
-
-    vec_res   = col.query(
-        query_texts = [query],
-        n_results   = min(RECALL, count),
-        include     = ['metadatas', 'distances']
+    # Step1: 两路召回
+    vec_results = _qdrant_search(
+        query, top_k=top_k * 3,
+        year_filter=year_filter,
+        partition_filter=partition_filter,
     )
-    vec_ids       = vec_res['ids'][0]           # list[str]
-    vec_ranked    = vec_ids
-    vec_score_map = {
-        vid: round(1 - d, 4)
-        for vid, d in zip(vec_ids, vec_res['distances'][0])
-    }
-    vec_meta_map  = {
-        vid: m
-        for vid, m in zip(vec_ids, vec_res['metadatas'][0])
-    }
 
-    # ── 2. BM25 关键词召回（若已就绪）────────────────────────────────────────
-    bm25_ranked = []
-    if _bm25_ready and _bm25 is not None and _jieba_module is not None:
-        tokens      = list(_jieba_module.cut(query))
-        raw_scores  = _bm25.get_scores(tokens)
-        top_indices = sorted(range(len(raw_scores)),
-                             key=lambda i: -raw_scores[i])[:RECALL]
-        bm25_ranked = [_bm25_ids[i] for i in top_indices]
-
-    # ── 3. RRF 融合 ────────────────────────────────────────────────────────────
-    all_lists = [vec_ranked]
-    if bm25_ranked:
-        all_lists.append(bm25_ranked)
-    merged = _rrf(all_lists)[:top_k]
-
-    # ── 4. 组装输出 ────────────────────────────────────────────────────────────
-    output = []
-    for doc_id, rrf_score in merged:
-        sid  = str(doc_id)
-        meta = dict(vec_meta_map.get(sid) or _bm25_metas.get(sid) or {})
-        meta['score']     = round(rrf_score, 4)
-        meta['vec_score'] = vec_score_map.get(sid, 0.0)
-        meta['hybrid']    = bool(bm25_ranked)   # 标注是否使用了混合检索
-        output.append(meta)
-
-    return output
-
-
-def search_vector_only(query: str, top_k: int = 8) -> list:
-    col   = _get_collection()
-    count = col.count()
-    if count == 0:
+    if not vec_results:
         return []
-    vec_res = col.query(query_texts=[query], n_results=min(top_k, count), include=['metadatas','distances'])
-    output  = []
-    for vid, meta, dist in zip(vec_res['ids'][0], vec_res['metadatas'][0], vec_res['distances'][0]):
-        item = dict(meta)
-        item['score'] = round(1 - dist, 4)
-        output.append(item)
-    return output
+
+    bm25_results = _bm25_search(query, top_k=top_k * 3) if _bm25_ready else []
+    hybrid = len(bm25_results) > 0
+
+    # Step2: RRF 融合
+    vec_ids  = [r["id"] for r in vec_results]
+    bm25_ids = [r["id"] for r in bm25_results]
+    ranked_lists = [vec_ids, bm25_ids] if hybrid else [vec_ids]
+    fused = _rrf(ranked_lists)
+
+    # Step3: 按 RRF 分数重组 doc
+    id_to_doc: dict[str, dict] = {r["id"]: r for r in vec_results}
+    for r in bm25_results:
+        if r["id"] not in id_to_doc:
+            id_to_doc[r["id"]] = r
+
+    merged = []
+    for doc_id, rrf_score in fused[:top_k * 2]:
+        if doc_id in id_to_doc:
+            doc = dict(id_to_doc[doc_id])
+            doc["score"]  = float(rrf_score)
+            doc["hybrid"] = hybrid
+            merged.append(doc)
+
+    # Step4: Cohere Rerank 精排
+    final = _rerank(query, merged, top_k)
+    return final
+
+
+def search_vector_only(
+    query: str,
+    top_k: int = 10,
+    year_filter: Optional[int] = None,
+    partition_filter: Optional[str] = None,
+) -> list[dict]:
+    """纯向量检索（不做 RRF 和 Rerank），调试 / 对比用"""
+    results = _qdrant_search(
+        query, top_k=top_k,
+        year_filter=year_filter,
+        partition_filter=partition_filter,
+    )
+    for r in results:
+        r["score"] = float(r.get("score", 0.0))
+    return results[:top_k]
+
+
+def get_collection_count() -> int:
+    """返回 collection 中的向量数量（健康检查用）"""
+    try:
+        info = _get_qdrant().get_collection(config.QDRANT_COLLECTION)
+        return info.points_count or 0
+    except Exception:
+        return -1

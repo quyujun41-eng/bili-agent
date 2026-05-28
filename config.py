@@ -22,6 +22,27 @@ class Settings(BaseSettings):
     OPENAI_BASE_URL: str = Field(default="https://api.openai.com/v1")
     OPENAI_MODEL: str    = Field(default="gpt-4o-mini")
 
+    # 向量数据库（Qdrant）
+    QDRANT_URL: str        = Field(default="http://localhost:6333")
+    QDRANT_COLLECTION: str = Field(default="bilibili_videos")
+
+    # 缓存 & 会话（Redis）
+    REDIS_URL: str = Field(default="redis://localhost:6379/0")
+
+    # Reranker（Cohere API）
+    COHERE_API_KEY: str = Field(default="")
+    COHERE_RERANK_MODEL: str = Field(default="rerank-multilingual-v3.0")
+
+    # Embedding 模型（本地 sentence-transformers）
+    EMBED_MODEL: str = Field(
+        default="BAAI/bge-small-zh-v1.5",
+        description="sentence-transformers 模型名称"
+    )
+    EMBED_CACHE_TTL: int = Field(
+        default=86400,
+        description="Embedding Redis 缓存 TTL（秒），默认 24h"
+    )
+
     # 数据库 & 端口
     DB_PATH: str = Field(default="")
     PORT: int    = Field(default=5001, ge=1, le=65535)
@@ -61,7 +82,17 @@ CLAUDE_MODEL       = _settings.CLAUDE_MODEL
 OPENAI_API_KEY     = _settings.OPENAI_API_KEY
 OPENAI_BASE_URL    = _settings.OPENAI_BASE_URL
 OPENAI_MODEL       = _settings.OPENAI_MODEL
-DB_PATH            = _settings.DB_PATH or os.path.join(
+
+# 新增配置项
+QDRANT_URL         = _settings.QDRANT_URL
+QDRANT_COLLECTION  = _settings.QDRANT_COLLECTION
+REDIS_URL          = _settings.REDIS_URL
+COHERE_API_KEY     = _settings.COHERE_API_KEY
+COHERE_RERANK_MODEL = _settings.COHERE_RERANK_MODEL
+EMBED_MODEL        = _settings.EMBED_MODEL
+EMBED_CACHE_TTL    = _settings.EMBED_CACHE_TTL
+
+DB_PATH = _settings.DB_PATH or os.path.join(
     os.path.dirname(__file__), "..", "bilibili.db"
 )
 PORT = _settings.PORT
