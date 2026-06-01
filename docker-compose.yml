@@ -1,9 +1,60 @@
 services:
-  bili-agent:
-    build: .
+
+  qdrant:
+    image: qdrant/qdrant:v1.9.2
+    container_name: bili-qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null && exit 0 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: bili-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bili-agent-app:latest
+    container_name: bili-app
     ports:
       - "5001:5001"
     volumes:
-      - ./config.py:/app/config.py                          # 配置文件
-      - ../bilibili.db:/bilibili.db                         # 数据库（容器内路径 /bilibili.db）
+      - ./.env:/app/.env:ro
+      - ../bilibili.db:/bilibili.db:ro
+      - /home/ubuntu/models:/root/.cache/huggingface/hub
+    environment:
+      QDRANT_URL:   "http://qdrant:6333"
+      REDIS_URL:    "redis://redis:6379/0"
+      HF_ENDPOINT:  "https://hf-mirror.com"
+      TRANSFORMERS_OFFLINE: "1"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 120s
+      retries: 3
     restart: unless-stopped
+
+volumes:
+  qdrant_data:
+  redis_data:
