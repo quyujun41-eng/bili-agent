@@ -1,5 +1,6 @@
-import json, traceback, uuid, time
-from fastapi import FastAPI, HTTPException, Request
+import json, traceback, uuid, time, asyncio
+from concurrent.futures import ThreadPoolExecutor
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -10,6 +11,8 @@ import memory as mem
 import rag
 import monitor
 from agents import sql_agent_stream
+
+_thread_pool = ThreadPoolExecutor(max_workers=4)
 
 app       = FastAPI(title="B站AI数据分析", version="5.0.0")
 templates = Jinja2Templates(directory="templates")
@@ -33,6 +36,28 @@ async def auth_middleware(request: Request, call_next):
 async def on_startup():
     import rag as _rag
     _rag._init_background()
+    # 启动后台索引新鲜度检查（每小时）
+    asyncio.create_task(_index_freshness_loop())
+
+
+async def _index_freshness_loop():
+    """每小时检查 DB 行数与 Qdrant 向量数，不一致时自动增量重建"""
+    await asyncio.sleep(3600)   # 启动后 1 小时开始
+    while True:
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(config.DB_PATH)
+            db_count = conn.execute("SELECT COUNT(*) FROM HuiZong").fetchone()[0]
+            conn.close()
+            qdrant_count = rag.get_collection_count()
+            if db_count > qdrant_count + 100:   # 新增超过 100 条才触发
+                logger.info(f"索引过期: DB={db_count} Qdrant={qdrant_count}，后台重建中")
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, rag._build_qdrant_index)
+                logger.info("增量索引重建完成")
+        except Exception as e:
+            logger.warning(f"索引检查失败: {e}")
+        await asyncio.sleep(3600)
 
 
 @app.get("/")
@@ -59,21 +84,36 @@ async def ask(body: AskBody):
     success     = [True]
 
     async def generate():
+        """在线程池中运行同步生成器，通过队列传回主事件循环，不阻塞其他请求"""
+        loop   = asyncio.get_event_loop()
+        queue  = asyncio.Queue(maxsize=100)
+
+        def _run():
+            try:
+                for chunk in sql_agent_stream(question, session_id=session_id,
+                                              history=body.history or None):
+                    asyncio.run_coroutine_threadsafe(queue.put(chunk), loop).result()
+            except Exception as e:
+                asyncio.run_coroutine_threadsafe(
+                    queue.put({"type": "error", "error": str(e)}), loop
+                ).result()
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop).result()
+
+        loop.run_in_executor(_thread_pool, _run)
+
         try:
-            for chunk in sql_agent_stream(question, session_id=session_id,
-                                          history=body.history or None):
+            while True:
+                chunk = await asyncio.wait_for(queue.get(), timeout=60)
+                if chunk is None:
+                    break
                 if chunk.get("type") == "agent":
                     final_agent[0] = chunk.get("agent", "chat")
+                if chunk.get("type") == "error":
+                    success[0] = False
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            success[0] = False
-            traceback.print_exc()
+        finally:
             monitor.log(question, final_agent[0],
-                        (time.time() - start_time) * 1000, False, str(e))
-            yield f"data: {json.dumps({'type': 'error', 'error': str(e)})}\n\n"
-        else:
-            monitor.log(question, final_agent[0],
-                        (time.time() - start_time) * 1000, True)
+                        (time.time() - start_time) * 1000, success[0])
 
     return StreamingResponse(
         generate(),
@@ -115,6 +155,20 @@ async def feedback(body: FeedbackBody):
         raise HTTPException(400, "rating must be up or down")
     monitor.log_feedback(body.session_id, body.question, body.rating)
     return JSONResponse({"ok": True})
+
+
+@app.post("/api/reindex")
+async def reindex(background_tasks: BackgroundTasks):
+    """手动触发向量索引重建（爬虫跑完后调用）"""
+    def _do():
+        try:
+            rag._ensure_collection()
+            rag._build_qdrant_index()
+            logger.info("手动重建索引完成")
+        except Exception as e:
+            logger.error(f"重建索引失败: {e}")
+    background_tasks.add_task(_do)
+    return JSONResponse({"ok": True, "message": "重建任务已启动，后台执行中"})
 
 
 @app.get("/api/eval")

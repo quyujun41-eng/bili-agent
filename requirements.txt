@@ -1,27 +1,31 @@
 # Web 框架
-fastapi
-uvicorn[standard]
+fastapi==0.136.3
+uvicorn[standard]==0.48.0
+starlette==1.2.1
 jinja2
 
 # LLM + Embedding（OpenAI API）
-anthropic
-openai
+anthropic==0.105.2
+openai==2.40.0
 
 # 向量数据库
 qdrant-client==1.9.2
 
+# 异步 SQLite
+aiosqlite
+
 # Redis
-redis>=5.0.0
+redis==8.0.0
 
 # Reranker
-cohere>=5.0.0
+cohere==7.0.3
 
 # 关键字检索
-rank-bm25
-jieba
+rank-bm25==0.2.2
+jieba==0.42.1
 
 # 数值计算
-numpy<2
+numpy==1.26.4
 
 # 配置
-pydantic-settings
+pydantic-settings==2.14.1

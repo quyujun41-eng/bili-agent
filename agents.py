@@ -82,6 +82,7 @@ A: SELECT 标题, 作者, 粉丝数, 播放量, ROUND(粉丝数*1.0/播放量,4)
 只输出 SQL，不要任何解释。"""
 
 def _run_sql(sql: str):
+    """同步版本，供线程池调用"""
     uri  = f"file:{config.DB_PATH}?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     try:
@@ -92,6 +93,12 @@ def _run_sql(sql: str):
         return cols, rows
     finally:
         conn.close()
+
+async def _run_sql_async(sql: str):
+    """异步版本：在线程池中执行，不阻塞事件循环"""
+    import asyncio
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _run_sql, sql)
 
 def _extract_sql(text: str) -> str:
     m = re.search(r'```sql\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
