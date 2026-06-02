@@ -1,5 +1,6 @@
 """
 agents.py —— SQL / RAG / Chat 三路由 Agent + 流式输出
+升级：LLM 语义路由、SQL few-shot 示例、多轮 RAG 历史融合
 """
 import sqlite3, json, re, time, logging
 from typing import Optional, Iterator
@@ -45,7 +46,7 @@ def _cache_set(question: str, data: dict):
     _mem_cache[key] = data
 
 
-# ── SQL 工具 ──────────────────────────────────────────────────────────────────
+# ── SQL 工具 + few-shot 示例 ──────────────────────────────────────────────────
 _SQL_SCHEMA = """你是 SQLite 专家。数据库只有一张表 HuiZong（B站视频数据），字段说明：
 id INTEGER 主键, 标题 TEXT 视频标题, 作者 TEXT UP主名字, 简介 TEXT 视频简介,
 链接 TEXT 视频URL, 播放量 FLOAT 播放次数, 弹幕量 FLOAT 弹幕数量,
@@ -58,6 +59,25 @@ id INTEGER 主键, 标题 TEXT 视频标题, 作者 TEXT UP主名字, 简介 TEX
   "最受欢迎"/"最火" = 播放量最高
   "互动最好" = 点赞+评论+转发+投币 之和最高
   "涨粉潜力" = 粉丝数/播放量 比值最高
+
+示例：
+Q: 播放量最高的10个视频
+A: SELECT id, 标题, 作者, 播放量 FROM HuiZong ORDER BY 播放量 DESC LIMIT 10;
+
+Q: 各分区平均播放量对比
+A: SELECT 分区, AVG(播放量) as 平均播放量, COUNT(*) as 视频数 FROM HuiZong GROUP BY 分区 ORDER BY 平均播放量 DESC;
+
+Q: 互动最好的前5个视频
+A: SELECT 标题, 作者, (点赞+评论+转发+投币) as 互动总量 FROM HuiZong ORDER BY 互动总量 DESC LIMIT 5;
+
+Q: 2025年和2026年各分区视频数量对比
+A: SELECT data_year, 分区, COUNT(*) as 数量 FROM HuiZong WHERE data_year IN (2025,2026) GROUP BY data_year, 分区 ORDER BY data_year, 数量 DESC;
+
+Q: 粉丝数超过100万的UP主
+A: SELECT DISTINCT 作者, MAX(粉丝数) as 粉丝数 FROM HuiZong WHERE 粉丝数 > 1000000 GROUP BY 作者 ORDER BY 粉丝数 DESC;
+
+Q: 点赞投币比最高的视频（涨粉潜力）
+A: SELECT 标题, 作者, 粉丝数, 播放量, ROUND(粉丝数*1.0/播放量, 4) as 涨粉比 FROM HuiZong WHERE 播放量 > 10000 ORDER BY 涨粉比 DESC LIMIT 10;
 
 只输出 SQL，不要任何解释。"""
 
@@ -127,23 +147,49 @@ def _llm_once(system: str, messages: list, max_tokens: int = 300) -> str:
     return "".join(_stream_llm(system, messages, max_tokens))
 
 
-# ── 路由判断 ──────────────────────────────────────────────────────────────────
-_DATA_KW = [
-    '播放', '分区', '作者', 'UP', '点赞', '弹幕', '收藏',
-    '排行', '排名', '最高', '最多', '最少', '平均', '统计', '对比',
-    '数据', '查询', '多少', '哪个', '哪些', '投币', '评论', '转发',
-    '粉丝', '时长', '投稿', '年份', 'top', 'Top', 'TOP',
-]
-_RAG_KW = ['推荐', '找', '搜', '相关', '类似', '关于', '介绍', '内容', '什么视频']
+# ── 语义路由（LLM 分类 + 关键词兜底）────────────────────────────────────────
+_ROUTE_CACHE: dict = {}
+_ROUTE_CACHE_TTL = 3600
+
+_ROUTE_PROMPT = """将用户问题分类为以下意图之一：
+- sql：数据统计查询（播放量排行、数量统计、均值对比、最高最低、粉丝数等数值分析）
+- rag：视频语义搜索推荐（找视频、推荐内容、搜索某类视频）
+- chat：闲聊、个人问题、问AI自身或其他
+
+只输出分类名称：sql、rag 或 chat，不要其他内容。"""
 
 def _route(question: str) -> str:
-    if question.startswith(('你', '您', '我想', '能不能', '可以')):
+    # 明显个人问句 → chat
+    if question.startswith(('你', '您', '我想聊', '帮我解释', '什么是', '介绍一下')):
         return "chat"
-    if any(kw in question for kw in _RAG_KW):
-        return "rag"
-    if any(kw in question for kw in _DATA_KW):
-        return "sql"
-    return "chat"
+
+    # 路由缓存
+    cache_key = question.strip().lower()[:60]
+    entry = _ROUTE_CACHE.get(cache_key)
+    if entry and time.time() - entry["ts"] < _ROUTE_CACHE_TTL:
+        return entry["agent"]
+
+    # LLM 语义分类
+    try:
+        result = _llm_once(_ROUTE_PROMPT,
+                           [{"role": "user", "content": question}],
+                           max_tokens=5).strip().lower()
+        if "sql"  in result: agent = "sql"
+        elif "rag" in result: agent = "rag"
+        else:                 agent = "chat"
+    except Exception:
+        # 关键词兜底
+        _RAG_KW  = ['推荐', '找', '搜', '相关', '类似', '关于', '什么视频']
+        _DATA_KW = ['播放', '分区', '作者', 'UP', '点赞', '弹幕', '收藏',
+                    '排行', '排名', '最高', '最多', '最少', '平均', '统计',
+                    '对比', '数据', '查询', '多少', '投币', '评论', '转发',
+                    '粉丝', '时长', '投稿', '年份', 'top', 'Top', 'TOP']
+        if any(kw in question for kw in _RAG_KW):  agent = "rag"
+        elif any(kw in question for kw in _DATA_KW): agent = "sql"
+        else:                                        agent = "chat"
+
+    _ROUTE_CACHE[cache_key] = {"agent": agent, "ts": time.time()}
+    return agent
 
 
 # ── Agent 主入口 ──────────────────────────────────────────────────────────────
@@ -152,6 +198,7 @@ def sql_agent_stream(question: str, session_id: str = "default",
     if history is None:
         history = mem.get_history(session_id)
 
+    # 缓存命中（无历史时才走缓存）
     if not history:
         cached = _cache_get(question)
         if cached:
@@ -189,7 +236,8 @@ def sql_agent_stream(question: str, session_id: str = "default",
                 if attempt == 0:
                     fix = _llm_once(
                         _SQL_SCHEMA,
-                        [{"role": "user", "content": f"修正 SQL（错误：{err}）：\n{sql}"}],
+                        [{"role": "user",
+                          "content": f"修正 SQL（错误：{err}）：\n{sql}"}],
                         max_tokens=300,
                     )
                     sql = _extract_sql(fix)
@@ -228,19 +276,31 @@ def sql_agent_stream(question: str, session_id: str = "default",
 
     # ── RAG agent ─────────────────────────────────────────────────────────────
     elif agent == "rag":
-        results = rag.search(question, top_k=5)
+        # 多轮 RAG：用对话历史中最近的用户消息丰富检索查询
+        enriched_query = question
+        if history:
+            recent_user = [m["content"] for m in history[-6:]
+                           if m["role"] == "user"]
+            if recent_user and recent_user[-1] != question:
+                context = " ".join(recent_user[-2:])
+                enriched_query = f"{context} {question}"
+
+        results = rag.search(enriched_query, top_k=5)
         if not results:
             yield {"type": "text", "text": "暂时没有找到相关视频，请换个关键词试试。"}
             yield {"type": "done", "sql": "", "columns": [], "rows": [], "total": 0,
                    "chart": {"should_chart": False}}
             return
 
-        ctx    = "\n".join([f"- 《{r['title']}》 作者：{r['author']} 分区：{r['partition']}"
-                            for r in results])
+        ctx    = "\n".join([
+            f"- 《{r['title']}》 作者：{r['author']} 分区：{r['partition']}"
+            for r in results
+        ])
         answer = ""
         for text in _stream_llm(
             "你是B站视频推荐助手，根据检索结果推荐视频，简洁回答。",
-            history + [{"role": "user", "content": f"问题：{question}\n\n相关视频：\n{ctx}"}],
+            history + [{"role": "user",
+                        "content": f"问题：{question}\n\n相关视频：\n{ctx}"}],
             max_tokens=300,
         ):
             answer += text
