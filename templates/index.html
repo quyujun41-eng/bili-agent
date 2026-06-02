@@ -93,7 +93,7 @@ body {
 .no-sessions { font-size: 12px; color: rgba(255,255,255,.2); padding: 6px 8px; }
 
 /* 导航和信息 */
-.side-menu { padding: 8px; flex: 1; overflow-y: auto; }
+.side-menu { padding: 8px; flex: 1; overflow-y: auto; min-height: 0; }
 .side-menu a {
   display: flex; align-items: center; gap: 9px;
   padding: 9px 10px; margin-bottom: 2px;
@@ -232,6 +232,26 @@ tr:nth-child(even) td { background: #f5f3ff; }
   background: #fff; border-radius: 12px; cursor: pointer; transition: all .15s;
 }
 .btn-csv:hover { background: var(--primary); color: #fff; }
+.insight-box {
+  margin-top: 10px; padding: 8px 12px;
+  background: #fffbeb; border-left: 3px solid #f59e0b;
+  border-radius: 0 8px 8px 0; font-size: 13px; color: #92400e;
+}
+.rewrite-hint {
+  font-size: 11px; color: #a5b4fc; margin-bottom: 6px;
+  display: flex; align-items: center; gap: 5px;
+}
+.feedback-row {
+  margin-top: 8px; display: flex; align-items: center; gap: 8px;
+}
+.fb-btn {
+  background: none; border: 1px solid #e5e7eb;
+  border-radius: 8px; padding: 3px 10px; cursor: pointer;
+  font-size: 14px; transition: all .15s; color: #6b7280;
+}
+.fb-btn:hover { border-color: var(--primary); background: var(--pri-light); }
+.fb-btn:disabled { opacity: .5; cursor: default; }
+.fb-label { font-size: 11px; color: #aaa; }
 .thinking { color: #aaa; font-size: 13px; }
 .thinking::after { content: ''; animation: dots 1.2s infinite; }
 @keyframes dots { 0%,20%{content:'.'} 40%{content:'..'} 60%,100%{content:'...'} }
@@ -318,6 +338,10 @@ tr:nth-child(even) td { background: #f5f3ff; }
       <div class="stat-card">
         <div class="stat-val" id="statAvgMs">0ms</div>
         <div class="stat-label">平均耗时</div>
+      </div>
+      <div class="stat-card" style="grid-column:span 2;">
+        <div class="stat-val" id="statFbRate" style="font-size:14px;">-</div>
+        <div class="stat-label">好评率</div>
       </div>
     </div>
     <div class="agent-pills" id="agentPills"></div>
@@ -437,9 +461,31 @@ function loadSession(sessionId) {
     el.classList.toggle('active', el.dataset.id === sessionId);
   });
   var box = document.getElementById('chatBox');
-  box.innerHTML = '';
-  appendMsg('bot',
-    '<div class="bubble"><div style="font-size:13px;color:#6b7280;">已切换到该会话，继续输入即可。</div></div>');
+  box.innerHTML = '<div style="text-align:center;padding:20px;color:#aaa;font-size:13px;">加载中...</div>';
+
+  fetch('/api/session/' + sessionId + '/history', {
+    headers: {'Authorization': 'Bearer ' + ACCESS_TOKEN}
+  }).then(function(r){ return r.json(); }).then(function(history) {
+    box.innerHTML = '';
+    if (!history || history.length === 0) {
+      appendMsg('bot', '<div class="bubble"><div style="font-size:13px;color:#6b7280;">暂无历史消息。</div></div>');
+      return;
+    }
+    // 渲染历史消息
+    for (var i = 0; i < history.length; i++) {
+      var msg = history[i];
+      chatHistory.push(msg);
+      if (msg.role === 'user') {
+        appendMsg('user', '<div class="bubble">' + escHtml(msg.content) + '</div>');
+      } else {
+        appendMsg('bot', '<div class="bubble"><div style="font-size:14px;line-height:1.8;">' + escHtml(msg.content) + '</div></div>');
+      }
+    }
+    box.scrollTop = box.scrollHeight;
+  }).catch(function() {
+    box.innerHTML = '';
+    appendMsg('bot', '<div class="bubble"><div style="font-size:13px;color:#6b7280;">加载失败，请重试。</div></div>');
+  });
 }
 
 function delSession(e, sessionId) {
@@ -460,6 +506,9 @@ function loadStats() {
   }).then(function(r){ return r.json(); }).then(function(s) {
     document.getElementById('statTotal').textContent = s.total || 0;
     document.getElementById('statAvgMs').textContent = (s.avg_ms || 0) + 'ms';
+    var fb = s.feedback || {};
+    var fbEl = document.getElementById('statFbRate');
+    if (fbEl) fbEl.textContent = fb.total ? fb.like_rate + '%' : '-';
     var pills = '';
     if (s.by_agent) {
       if (s.by_agent.sql)  pills += '<span class="agent-pill sql">SQL ' + s.by_agent.sql + '</span>';
@@ -495,8 +544,12 @@ function sendQ() {
 
   appendMsg('bot', '<div class="bubble thinking" id="' + thinkId + '">AI 正在思考</div>');
 
-  function agentIcon(t)  { return t==='sql'?'fa-database':t==='rag'?'fa-search':'fa-comments'; }
-  function agentLabel(t) { return t==='sql'?'数据查询':t==='rag'?'视频推荐':'智能问答'; }
+  function agentIcon(t)  {
+    return t==='sql'?'fa-database':t==='rag'?'fa-search':t==='combined'?'fa-random':'fa-comments';
+  }
+  function agentLabel(t) {
+    return t==='sql'?'数据查询':t==='rag'?'视频推荐':t==='combined'?'联合检索':'智能问答';
+  }
 
   function ensureBubble() {
     if (bubbleCreated) return;
@@ -549,6 +602,14 @@ function sendQ() {
                   '<div style="font-size:14px;line-height:1.8;">' + escHtml(answerText) + '</div>';
                 document.getElementById('chatBox').scrollTop = 9999;
               }
+            } else if (chunk.type === 'rewrite') {
+              var hint = document.createElement('div');
+              hint.className = 'msg bot';
+              hint.innerHTML = '<div class="rewrite-hint"><i class="fa fa-magic"></i>问题已改写为：「' + escHtml(chunk.rewritten) + '」</div>';
+              document.getElementById('chatBox').appendChild(hint);
+            } else if (chunk.type === 'status') {
+              var el = document.getElementById(thinkId);
+              if (el) el.textContent = chunk.text;
             } else if (chunk.type === 'done') {
               ensureBubble();
               renderFinal(bubbleId, answerText, chunk);
@@ -601,6 +662,15 @@ function renderFinal(bubbleId, answerText, data) {
       html += '<div class="total-hint"><i class="fa fa-info-circle"></i> 共 ' + data.total + ' 条，显示前 ' + data.rows.length + ' 条</div>';
     html += '<button class="btn-csv" onclick="downloadCSV(this)"><i class="fa fa-download"></i> 下载 CSV</button>';
   }
+  if (data.insight) {
+    html += '<div class="insight-box">' + escHtml(data.insight) + '</div>';
+  }
+  var fbQ = answerText.slice(0,80).replace(/'/g, '');
+  html += '<div class="feedback-row">' +
+    '<span class="fb-label">有帮助吗？</span>' +
+    '<button class="fb-btn" onclick="sendFeedback(this,\'up\',\'' + fbQ + '\')">👍</button>' +
+    '<button class="fb-btn" onclick="sendFeedback(this,\'down\',\'' + fbQ + '\')">👎</button>' +
+    '</div>';
   b.innerHTML = html;
   document.getElementById('chatBox').scrollTop = 9999;
   if (data.chart && data.chart.should_chart && data.chart.option) {
@@ -641,6 +711,17 @@ function appendMsg(role, content) {
 
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function sendFeedback(btn, rating, question) {
+  var row = btn.parentElement;
+  row.querySelectorAll('.fb-btn').forEach(function(b) { b.disabled = true; });
+  btn.textContent = rating === 'up' ? '👍 谢谢' : '👎 已记录';
+  fetch('/api/feedback', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + ACCESS_TOKEN},
+    body: JSON.stringify({session_id: currentSession, question: question, rating: rating})
+  }).then(function(){ loadStats(); });
 }
 
 function generateId() {

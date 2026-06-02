@@ -3,6 +3,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from typing import Optional
 
 import config
 import memory as mem
@@ -10,7 +11,7 @@ import rag
 import monitor
 from agents import sql_agent_stream
 
-app       = FastAPI(title="B站AI数据分析", version="4.0.0")
+app       = FastAPI(title="B站AI数据分析", version="5.0.0")
 templates = Jinja2Templates(directory="templates")
 
 
@@ -86,6 +87,11 @@ async def list_sessions():
     return JSONResponse(mem.list_sessions(limit=30))
 
 
+@app.get("/api/session/{session_id}/history")
+async def get_session_history(session_id: str):
+    return JSONResponse(mem.get_history(session_id))
+
+
 @app.delete("/api/session/{session_id}")
 async def clear_session(session_id: str):
     mem.clear_session(session_id)
@@ -97,6 +103,42 @@ async def get_stats():
     return JSONResponse(monitor.stats())
 
 
+class FeedbackBody(BaseModel):
+    session_id: str = ""
+    question:   str = ""
+    rating:     str  # "up" | "down"
+
+
+@app.post("/api/feedback")
+async def feedback(body: FeedbackBody):
+    if body.rating not in ("up", "down"):
+        raise HTTPException(400, "rating must be up or down")
+    monitor.log_feedback(body.session_id, body.question, body.rating)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/eval")
+async def eval_index():
+    """对 RAG 索引做抽样质量评测"""
+    test_queries = ["搞笑视频", "游戏攻略", "美食烹饪", "音乐MV",
+                    "科技数码", "动漫二次元", "运动健身", "旅行vlog"]
+    results = []
+    for q in test_queries:
+        hits = rag.search(q, top_k=3)
+        results.append({
+            "query":     q,
+            "hits":      len(hits),
+            "top_score": round(hits[0]["score"], 4) if hits else 0,
+            "top_title": hits[0]["title"][:30] if hits else "",
+        })
+    avg_score = round(sum(r["top_score"] for r in results) / len(results), 4)
+    return JSONResponse({
+        "vectors":   rag.get_collection_count(),
+        "avg_score": avg_score,
+        "queries":   results,
+    })
+
+
 @app.get("/health")
 async def health():
     qdrant_count = rag.get_collection_count()
@@ -104,7 +146,7 @@ async def health():
     qdrant_ok    = qdrant_count >= 0
     return JSONResponse({
         "status":  "ok" if (qdrant_ok and redis_ok) else "degraded",
-        "version": "4.0.0",
+        "version": "5.0.0",
         "deps": {
             "qdrant": {"ok": qdrant_ok, "vectors": qdrant_count},
             "redis":  {"ok": redis_ok},
