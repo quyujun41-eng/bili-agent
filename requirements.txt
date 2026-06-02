@@ -3,16 +3,12 @@ fastapi
 uvicorn[standard]
 jinja2
 
-# LLM
+# LLM + Embedding（OpenAI API）
 anthropic
 openai
 
-# 向量数据库（与 Qdrant server 1.9.x 兼容）
+# 向量数据库
 qdrant-client==1.9.2
-
-# Embedding（torch 由 Dockerfile 单独安装 CPU-only 版本）
-sentence-transformers==3.4.1
-transformers==4.44.2
 
 # Redis
 redis>=5.0.0
@@ -24,7 +20,7 @@ cohere>=5.0.0
 rank-bm25
 jieba
 
-# 数值计算（<2 避免与 CPU-only torch 不兼容）
+# 数值计算
 numpy<2
 
 # 配置

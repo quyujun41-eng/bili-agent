@@ -36,11 +36,9 @@ services:
     volumes:
       - ./.env:/app/.env:ro
       - ../bilibili.db:/bilibili.db:ro
-      - /home/ubuntu/models:/root/.cache/huggingface/hub
     environment:
       QDRANT_URL:   "http://qdrant:6333"
       REDIS_URL:    "redis://redis:6379/0"
-      HF_ENDPOINT:  "https://hf-mirror.com"
       TRANSFORMERS_OFFLINE: "1"
     depends_on:
       qdrant:
