@@ -108,11 +108,18 @@ def _ensure_collection() -> bool:
                 client.delete_collection(config.QDRANT_COLLECTION)
             elif (info.points_count or 0) > 0:
                 return True
-        client.create_collection(
-            collection_name=config.QDRANT_COLLECTION,
-            vectors_config=VectorParams(size=target_dim, distance=Distance.COSINE),
-        )
-        logger.info(f"创建 Qdrant collection: {config.QDRANT_COLLECTION} dim={target_dim}")
+        try:
+            client.create_collection(
+                collection_name=config.QDRANT_COLLECTION,
+                vectors_config=VectorParams(size=target_dim, distance=Distance.COSINE),
+            )
+            logger.info(f"创建 Qdrant collection: {config.QDRANT_COLLECTION} dim={target_dim}")
+        except Exception as ce:
+            if "already exists" in str(ce).lower():
+                logger.info("Collection 已由其他 worker 创建")
+                info = client.get_collection(config.QDRANT_COLLECTION)
+                return (info.points_count or 0) > 0
+            raise
         return False
     except Exception as e:
         logger.error(f"Qdrant collection 初始化失败: {e}")
