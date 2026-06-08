@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+*.bak
+*.log
+*.pkl
+chroma_db/
+data/
