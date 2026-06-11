@@ -178,6 +178,67 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
 .chat-send { padding: 13px 24px; background: #4facfe; color: #fff; border: none;
   border-radius: 24px; font-size: 14px; cursor: pointer; font-weight: 700; }
 
+/* ── 数据覆盖页 ── */
+.coverage-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.coverage-desc { font-size: 13px; color: #667; line-height: 1.6; }
+.legend-row { display: flex; gap: 20px; margin-bottom: 20px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #556; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+.coverage-table-wrap { background: #fff; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.06); overflow: hidden; }
+.coverage-table { width: 100%; border-collapse: collapse; }
+.coverage-table th { background: #0f1c2e; color: #8899aa; padding: 12px 16px; font-size: 12px;
+  font-weight: 600; text-align: center; letter-spacing: .5px; }
+.coverage-table th:first-child { text-align: left; width: 160px; }
+.coverage-table td { padding: 14px 16px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
+.coverage-table tr:last-child td { border-bottom: none; }
+.coverage-table tr:hover td { background: #fafbff; }
+.industry-name { font-size: 13px; font-weight: 600; color: #1a2332; }
+.industry-sub  { font-size: 11px; color: #99a; margin-top: 2px; }
+
+.cell-wrap { display: flex; justify-content: center; }
+.status-cell { display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 14px; border-radius: 8px; cursor: pointer; transition: all .15s; min-width: 80px; }
+.status-cell:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,.1); }
+
+.s-active { background: #ecfdf5; border: 1.5px solid #a7f3d0; }
+.s-active .s-icon { font-size: 16px; }
+.s-active .s-count { font-size: 13px; font-weight: 700; color: #059669; }
+.s-active .s-label { font-size: 10px; color: #6ee7b7; }
+
+.s-progress { background: #eff6ff; border: 1.5px solid #bfdbfe; }
+.s-progress .s-icon { font-size: 16px; }
+.s-progress .s-count { font-size: 11px; font-weight: 600; color: #3b82f6; }
+.s-progress .s-label { font-size: 10px; color: #93c5fd; }
+
+.s-locked { background: #f8f9fa; border: 1.5px dashed #d1d5db; }
+.s-locked .s-icon { font-size: 16px; opacity: .5; }
+.s-locked .s-count { font-size: 11px; font-weight: 600; color: #9ca3af; }
+.s-locked .s-label { font-size: 10px; color: #d1d5db; }
+.s-locked:hover { background: #f0f8ff; border-color: #4facfe; }
+.s-locked:hover .s-count { color: #4facfe; }
+
+/* 申请弹窗 */
+.modal-mask { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.45);
+  z-index: 100; align-items: center; justify-content: center; }
+.modal-mask.show { display: flex; }
+.modal-box { background: #fff; border-radius: 16px; padding: 28px; width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,.2); }
+.modal-title { font-size: 16px; font-weight: 700; color: #1a2332; margin-bottom: 6px; }
+.modal-sub { font-size: 13px; color: #667; margin-bottom: 20px; }
+.modal-form-item { margin-bottom: 14px; }
+.modal-label { font-size: 12px; color: #99a; margin-bottom: 6px; font-weight: 600; }
+.modal-input { width: 100%; padding: 10px 14px; border: 1.5px solid #e0e6ef; border-radius: 8px;
+  font-size: 13px; outline: none; }
+.modal-input:focus { border-color: #4facfe; }
+.modal-btns { display: flex; gap: 10px; margin-top: 20px; }
+.modal-confirm { flex: 1; padding: 11px; background: #4facfe; color: #fff; border: none;
+  border-radius: 8px; font-size: 14px; cursor: pointer; font-weight: 600; }
+.modal-cancel { padding: 11px 20px; background: #f0f2f5; color: #556; border: none;
+  border-radius: 8px; font-size: 14px; cursor: pointer; }
+.modal-success { text-align: center; padding: 10px 0; }
+.modal-success-icon { font-size: 48px; margin-bottom: 12px; }
+.modal-success-text { font-size: 14px; color: #334; line-height: 1.7; }
+
 /* ── 简历页 ── */
 .resume-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .upload-zone { border: 2px dashed #c0d0e8; border-radius: 12px; padding: 40px;
@@ -215,6 +276,9 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
   </div>
   <div class="nav-item" onclick="showPage('chat',this)">
     <span class="nav-icon">🤖</span> AI 对话
+  </div>
+  <div class="nav-item" onclick="showPage('coverage',this)">
+    <span class="nav-icon">🗺️</span> 数据覆盖
   </div>
   <div class="sidebar-footer">
     数据最后更新<br>2026-06-11 08:30
@@ -673,13 +737,122 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
       </div>
     </div>
 
+    <!-- ── 数据覆盖 ── -->
+    <div class="page" id="page-coverage">
+      <div class="coverage-header">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:#1a2332;margin-bottom:6px;">数据覆盖管理</div>
+          <div class="coverage-desc">已覆盖组合实时可用，<span style="color:#3b82f6">更新中</span>的明日可用，<span style="color:#9ca3af">未开通</span>的点击申请，后台排队爬取（约1-3天）。</div>
+        </div>
+      </div>
+      <div class="legend-row">
+        <div class="legend-item"><div class="legend-dot" style="background:#059669"></div> 已开通 · 实时可用</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div> 爬取中 · 明日可用</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#d1d5db;border:1px dashed #9ca3af"></div> 未开通 · 点击申请</div>
+      </div>
+      <div class="coverage-table-wrap">
+        <table class="coverage-table">
+          <thead>
+            <tr>
+              <th>行业 / 城市</th>
+              <th>🏙️ 深圳</th>
+              <th>🏙️ 北京</th>
+              <th>🏙️ 上海</th>
+              <th>🏙️ 广州</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="industry-name">🤖 AI / 算法</div><div class="industry-sub">大模型·算法·AI应用</div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-active"><div class="s-icon">✅</div><div class="s-count">486条</div><div class="s-label">今日更新</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-active"><div class="s-icon">✅</div><div class="s-count">312条</div><div class="s-label">今日更新</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-progress"><div class="s-icon">🔄</div><div class="s-count">爬取中</div><div class="s-label">明日可用</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('AI算法','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+            </tr>
+            <tr>
+              <td><div class="industry-name">💻 技术开发</div><div class="industry-sub">前端·后端·全栈·运维</div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-active"><div class="s-icon">✅</div><div class="s-count">1,203条</div><div class="s-label">今日更新</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-progress"><div class="s-icon">🔄</div><div class="s-count">爬取中</div><div class="s-label">明日可用</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('技术开发','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('技术开发','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+            </tr>
+            <tr>
+              <td><div class="industry-name">📊 数据分析</div><div class="industry-sub">BI·数据挖掘·增长分析</div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('数据分析','深圳')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('数据分析','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('数据分析','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('数据分析','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+            </tr>
+            <tr>
+              <td><div class="industry-name">🎯 产品经理</div><div class="industry-sub">产品·AI产品·游戏策划</div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('产品经理','深圳')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('产品经理','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('产品经理','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('产品经理','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+            </tr>
+            <tr>
+              <td><div class="industry-name">📢 运营市场</div><div class="industry-sub">内容·用户·品牌·增长</div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('运营市场','深圳')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('运营市场','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('运营市场','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('运营市场','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+            </tr>
+            <tr>
+              <td><div class="industry-name">🛒 电商跨境</div><div class="industry-sub">亚马逊·独立站·TikTok</div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('电商跨境','深圳')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('电商跨境','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('电商跨境','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('电商跨境','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+            </tr>
+            <tr>
+              <td><div class="industry-name">💰 金融财务</div><div class="industry-sub">投行·风控·量化·财务</div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('金融财务','深圳')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('金融财务','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('金融财务','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('金融财务','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div style="margin-top:16px;padding:14px 18px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;font-size:13px;color:#92400e;">
+        💡 申请开通后后台自动排队，凌晨低峰期执行爬取，预计 1-3 天内数据上线，就绪后邮件通知。
+      </div>
+    </div>
+
+    <!-- 申请弹窗 -->
+    <div class="modal-mask" id="applyModal">
+      <div class="modal-box">
+        <div id="modalForm">
+          <div class="modal-title">申请开通数据</div>
+          <div class="modal-sub" id="modalSubText">申请爬取该行业 × 城市组合的岗位数据</div>
+          <div class="modal-form-item">
+            <div class="modal-label">联系邮箱</div>
+            <input class="modal-input" placeholder="数据就绪后发送通知" type="email"/>
+          </div>
+          <div class="modal-form-item">
+            <div class="modal-label">优先级说明（选填）</div>
+            <input class="modal-input" placeholder="如：急需，正在求职中..."/>
+          </div>
+          <div class="modal-btns">
+            <button class="modal-cancel" onclick="closeModal()">取消</button>
+            <button class="modal-confirm" onclick="submitApply()">提交申请</button>
+          </div>
+        </div>
+        <div id="modalSuccess" class="modal-success" style="display:none;">
+          <div class="modal-success-icon">✅</div>
+          <div class="modal-success-text">申请已提交！<br/>后台将在 <strong>1-3 天内</strong> 完成数据爬取<br/>就绪后通过邮件通知您</div>
+          <button class="modal-confirm" style="margin-top:16px;width:100%;" onclick="closeModal()">好的</button>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 
 <script>
 var titles = {
   dashboard:'数据仪表盘', jobs:'岗位列表', detail:'岗位详情',
-  resume:'我的简历', insights:'市场洞察', chat:'AI 对话'
+  resume:'我的简历', insights:'市场洞察', chat:'AI 对话', coverage:'数据覆盖'
 };
 
 function showPage(id, el) {
@@ -766,6 +939,23 @@ function initCharts(page) {
     });
   }
 }
+
+function openModal(industry, city) {
+  document.getElementById('modalSubText').textContent = '申请开通：' + industry + ' · ' + city;
+  document.getElementById('modalForm').style.display = 'block';
+  document.getElementById('modalSuccess').style.display = 'none';
+  document.getElementById('applyModal').classList.add('show');
+}
+function closeModal() {
+  document.getElementById('applyModal').classList.remove('show');
+}
+function submitApply() {
+  document.getElementById('modalForm').style.display = 'none';
+  document.getElementById('modalSuccess').style.display = 'block';
+}
+document.getElementById('applyModal').addEventListener('click', function(e) {
+  if (e.target === this) closeModal();
+});
 
 // 初始化仪表盘
 setTimeout(function(){ initCharts('dashboard'); }, 100);
