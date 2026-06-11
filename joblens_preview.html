@@ -303,6 +303,18 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
 
     <!-- ── 仪表盘 ── -->
     <div class="page active" id="page-dashboard">
+      <!-- 城市 + 行业切换 -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;flex-wrap:wrap;">
+        <span style="font-size:12px;color:#99a;font-weight:600;">城市：</span>
+        <span class="filter-tag on" onclick="switchCity(this,'深圳','486','23.4K','214')">深圳</span>
+        <span class="filter-tag" onclick="switchCity(this,'北京','312','28.1K','178')">北京</span>
+        <span class="filter-tag" onclick="switchCity(this,'上海','—','—','—')" style="opacity:.5;cursor:not-allowed;" title="数据爬取中">上海 🔄</span>
+        <span class="filter-tag" onclick="switchCity(this,'广州','—','—','—')" style="opacity:.5;cursor:not-allowed;" title="未开通">广州 🔒</span>
+        <span class="filter-tag" onclick="switchCity(this,'杭州','—','—','—')" style="opacity:.5;cursor:not-allowed;" title="未开通">杭州 🔒</span>
+        <span style="margin-left:16px;font-size:12px;color:#99a;font-weight:600;">行业：</span>
+        <span class="filter-tag on">AI / 算法</span>
+        <span class="filter-tag" style="opacity:.5;cursor:not-allowed;">技术开发 🔒</span>
+      </div>
       <div class="stats-row">
         <div class="stat-card">
           <span class="stat-icon">💼</span>
@@ -759,6 +771,7 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
               <th>🏙️ 北京</th>
               <th>🏙️ 上海</th>
               <th>🏙️ 广州</th>
+              <th>🏙️ 杭州</th>
             </tr>
           </thead>
           <tbody>
@@ -768,6 +781,7 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
               <td><div class="cell-wrap"><div class="status-cell s-active"><div class="s-icon">✅</div><div class="s-count">312条</div><div class="s-label">今日更新</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-progress"><div class="s-icon">🔄</div><div class="s-count">爬取中</div><div class="s-label">明日可用</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('AI算法','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('AI算法','杭州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
             </tr>
             <tr>
               <td><div class="industry-name">💻 技术开发</div><div class="industry-sub">前端·后端·全栈·运维</div></td>
@@ -775,6 +789,7 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
               <td><div class="cell-wrap"><div class="status-cell s-progress"><div class="s-icon">🔄</div><div class="s-count">爬取中</div><div class="s-label">明日可用</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('技术开发','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('技术开发','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('技术开发','杭州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
             </tr>
             <tr>
               <td><div class="industry-name">📊 数据分析</div><div class="industry-sub">BI·数据挖掘·增长分析</div></td>
@@ -782,6 +797,7 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('数据分析','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('数据分析','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('数据分析','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('数据分析','杭州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
             </tr>
             <tr>
               <td><div class="industry-name">🎯 产品经理</div><div class="industry-sub">产品·AI产品·游戏策划</div></td>
@@ -789,6 +805,7 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('产品经理','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('产品经理','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('产品经理','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('产品经理','杭州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
             </tr>
             <tr>
               <td><div class="industry-name">📢 运营市场</div><div class="industry-sub">内容·用户·品牌·增长</div></td>
@@ -796,6 +813,7 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('运营市场','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('运营市场','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('运营市场','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('运营市场','杭州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
             </tr>
             <tr>
               <td><div class="industry-name">🛒 电商跨境</div><div class="industry-sub">亚马逊·独立站·TikTok</div></td>
@@ -803,6 +821,7 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('电商跨境','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('电商跨境','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('电商跨境','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('电商跨境','杭州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
             </tr>
             <tr>
               <td><div class="industry-name">💰 金融财务</div><div class="industry-sub">投行·风控·量化·财务</div></td>
@@ -810,6 +829,7 @@ body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('金融财务','北京')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('金融财务','上海')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
               <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('金融财务','广州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
+              <td><div class="cell-wrap"><div class="status-cell s-locked" onclick="openModal('金融财务','杭州')"><div class="s-icon">🔒</div><div class="s-count">申请开通</div><div class="s-label">点击申请</div></div></div></td>
             </tr>
           </tbody>
         </table>
@@ -938,6 +958,24 @@ function initCharts(page) {
       ],legend:{bottom:0}
     });
   }
+}
+
+var cityData = {
+  '深圳': {total:'486', salary:'23.4K', company:'214'},
+  '北京': {total:'312', salary:'28.1K', company:'178'},
+};
+function switchCity(el, city, total, salary, company) {
+  if (total === '—') { alert('该城市数据未开通，请前往「数据覆盖」页面申请'); return; }
+  document.querySelectorAll('#page-dashboard .filter-tag').forEach(function(t){
+    if(['深圳','北京','上海','广州','杭州'].some(function(c){return t.textContent.includes(c);}))
+      t.classList.remove('on');
+  });
+  el.classList.add('on');
+  var vals = document.querySelectorAll('#page-dashboard .stat-value');
+  vals[0].textContent = total;
+  vals[1].textContent = salary;
+  vals[3].textContent = company;
+  document.querySelector('.topbar-sub').textContent = city + ' · AI算法工程师方向 · 实时数据';
 }
 
 function openModal(industry, city) {
