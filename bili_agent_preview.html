@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>B站数据 AI 分析 — 升级版预览</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, 'PingFang SC', sans-serif; background: #f0f2f5;
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+
+/* ── 顶部 Tab 栏 ── */
+.topbar { background: #4a90e2; color: #fff; display: flex; align-items: center;
+  padding: 0 20px; height: 54px; flex-shrink: 0; gap: 0; }
+.topbar-title { font-size: 16px; font-weight: 800; margin-right: 24px; white-space: nowrap; }
+.topbar-title span { font-size: 11px; opacity: .7; font-weight: 400; margin-left: 8px; }
+.tab { padding: 0 20px; height: 54px; display: flex; align-items: center; font-size: 14px;
+  cursor: pointer; opacity: .7; border-bottom: 3px solid transparent; transition: all .2s; }
+.tab.active { opacity: 1; border-bottom-color: #fff; font-weight: 600; }
+.tab:hover { opacity: 1; background: rgba(255,255,255,.1); }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+.topbar-btn { padding: 6px 14px; border: 1.5px solid rgba(255,255,255,.5); border-radius: 16px;
+  font-size: 12px; color: #fff; cursor: pointer; transition: all .2s; background: transparent; }
+.topbar-btn:hover { background: rgba(255,255,255,.2); }
+
+/* ── 主体 ── */
+.body-wrap { display: flex; flex: 1; overflow: hidden; }
+
+/* ── 历史侧边栏 ── */
+.history-sidebar { width: 220px; background: #fff; border-right: 1px solid #e8ecf0;
+  display: flex; flex-direction: column; flex-shrink: 0; overflow: hidden; }
+.history-header { padding: 14px 16px; font-size: 12px; font-weight: 700; color: #99a;
+  border-bottom: 1px solid #f0f2f5; letter-spacing: .5px; text-transform: uppercase; }
+.history-list { flex: 1; overflow-y: auto; padding: 8px 0; }
+.history-item { padding: 10px 16px; cursor: pointer; border-left: 3px solid transparent;
+  transition: all .15s; }
+.history-item:hover { background: #f8fafe; }
+.history-item.active { background: #f0f7ff; border-left-color: #4a90e2; }
+.history-q { font-size: 13px; color: #334; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.history-meta { font-size: 11px; color: #aab; margin-top: 3px; }
+.history-divider { font-size: 11px; color: #bbc; padding: 8px 16px 4px; font-weight: 600; }
+
+/* ── 主聊天区 ── */
+.main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── 页面 ── */
+.page { display: none; flex: 1; overflow: hidden; flex-direction: column; }
+.page.active { display: flex; }
+
+/* ── 聊天页 ── */
+.suggestions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 20px;
+  border-bottom: 1px solid #f0f2f5; background: #fff; flex-shrink: 0; }
+.sug-btn { padding: 6px 14px; border: 1.5px solid #4a90e2; color: #4a90e2; background: #fff;
+  border-radius: 16px; font-size: 12px; cursor: pointer; transition: all .15s; }
+.sug-btn:hover { background: #4a90e2; color: #fff; }
+
+.chat-box { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 18px; }
+
+.msg { display: flex; flex-direction: column; }
+.msg.user { align-items: flex-end; }
+.msg.bot  { align-items: flex-start; }
+.msg-label { font-size: 11px; color: #aab; margin-bottom: 4px; }
+.bubble-user { background: #4a90e2; color: #fff; padding: 10px 16px;
+  border-radius: 18px 18px 4px 18px; max-width: 70%; font-size: 14px; line-height: 1.6; }
+.bubble-bot { background: #fff; border: 1px solid #e8ecf0; padding: 14px 16px;
+  border-radius: 4px 18px 18px 18px; max-width: 88%; font-size: 14px; line-height: 1.7;
+  box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+
+/* SQL 块升级版 */
+.sql-wrap { margin-top: 12px; border-radius: 8px; overflow: hidden; border: 1px solid #2a2a3e; }
+.sql-header { background: #1a1a2e; padding: 8px 14px; display: flex; align-items: center;
+  justify-content: space-between; }
+.sql-header-left { font-size: 11px; color: #6e6e8a; font-family: monospace; }
+.sql-actions { display: flex; gap: 8px; }
+.sql-btn { padding: 3px 10px; font-size: 11px; border-radius: 4px; cursor: pointer;
+  border: 1px solid; transition: all .15s; }
+.sql-btn-edit { border-color: #4a90e2; color: #4a90e2; background: transparent; }
+.sql-btn-edit:hover { background: #4a90e2; color: #fff; }
+.sql-btn-run  { border-color: #4ade80; color: #4ade80; background: transparent; }
+.sql-btn-run:hover  { background: #4ade80; color: #1a1a2e; }
+.sql-body { background: #1e1e2e; color: #a6e3a1; font-family: monospace; font-size: 12px;
+  padding: 12px 14px; white-space: pre-wrap; word-break: break-all; }
+.sql-body.editable { outline: none; border: 1px solid #4a90e2; }
+
+/* 图表区升级版 */
+.chart-wrap { margin-top: 12px; }
+.chart-type-row { display: flex; gap: 6px; margin-bottom: 8px; }
+.ct-btn { padding: 4px 12px; font-size: 12px; border: 1.5px solid #e0e6ef; border-radius: 12px;
+  cursor: pointer; color: #556; background: #fff; transition: all .15s; }
+.ct-btn.on { border-color: #4a90e2; color: #4a90e2; background: #f0f7ff; font-weight: 600; }
+.chart-el { width: 100%; height: 260px; }
+
+/* 数据表格升级版 */
+.table-wrap { margin-top: 12px; overflow-x: auto; border-radius: 8px; border: 1px solid #e8ecf0; }
+.table-toolbar { padding: 8px 12px; background: #fafbff; border-bottom: 1px solid #e8ecf0;
+  display: flex; align-items: center; justify-content: space-between; }
+.table-toolbar-left { font-size: 12px; color: #99a; }
+.table-toolbar-right { display: flex; gap: 6px; }
+.tbl-btn { padding: 4px 10px; font-size: 11px; border: 1px solid #d0d8f0; border-radius: 6px;
+  cursor: pointer; color: #4a90e2; background: #fff; transition: all .15s; }
+.tbl-btn:hover { background: #4a90e2; color: #fff; border-color: #4a90e2; }
+table { border-collapse: collapse; font-size: 12px; width: 100%; }
+th { background: #4a90e2; color: #fff; padding: 8px 12px; text-align: left; cursor: pointer;
+  white-space: nowrap; }
+th:hover { background: #357abd; }
+th .sort-arrow { opacity: .5; margin-left: 4px; }
+td { padding: 7px 12px; border-bottom: 1px solid #f0f2f5; }
+tr:nth-child(even) td { background: #f8f9ff; }
+tr:hover td { background: #f0f7ff; }
+
+/* 追问建议 */
+.followup-wrap { margin-top: 12px; }
+.followup-label { font-size: 11px; color: #99a; margin-bottom: 6px; font-weight: 600; }
+.followup-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.followup-btn { padding: 5px 12px; background: #f0f7ff; border: 1px solid #c0d8f0;
+  border-radius: 14px; font-size: 12px; color: #4a90e2; cursor: pointer; transition: all .15s; }
+.followup-btn:hover { background: #4a90e2; color: #fff; border-color: #4a90e2; }
+
+/* 总条数 */
+.total-hint { font-size: 12px; color: #aab; margin-top: 6px; }
+
+/* 输入栏 */
+.input-area { padding: 14px 20px; background: #fff; border-top: 1px solid #e8ecf0; flex-shrink: 0; }
+.input-row { display: flex; gap: 10px; }
+.input-row input { flex: 1; padding: 11px 18px; border: 1.5px solid #d0d8f0; border-radius: 24px;
+  font-size: 14px; outline: none; transition: border .2s; }
+.input-row input:focus { border-color: #4a90e2; }
+.input-row button { padding: 11px 24px; background: #4a90e2; color: #fff; border: none;
+  border-radius: 24px; font-size: 14px; cursor: pointer; font-weight: 700; transition: background .2s; }
+.input-row button:hover { background: #357abd; }
+
+/* ── 看板页 ── */
+.dashboard { flex: 1; overflow-y: auto; padding: 20px; }
+.db-stats { display: grid; grid-template-columns: repeat(4,1fr); gap: 14px; margin-bottom: 18px; }
+.db-stat { background: #fff; border-radius: 10px; padding: 16px 18px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+.db-stat-icon { font-size: 24px; float: right; opacity: .2; }
+.db-stat-label { font-size: 12px; color: #99a; margin-bottom: 6px; }
+.db-stat-val { font-size: 26px; font-weight: 800; color: #1a2332; }
+.db-stat-sub { font-size: 11px; color: #4ade80; margin-top: 3px; }
+.db-charts { display: grid; grid-template-columns: 3fr 2fr; gap: 14px; margin-bottom: 18px; }
+.db-card { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+.db-card-title { font-size: 13px; font-weight: 700; color: #1a2332; margin-bottom: 12px; }
+.db-chart-el { height: 220px; }
+.db-top { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.top-item { display: flex; align-items: center; gap: 10px; padding: 8px 0;
+  border-bottom: 1px solid #f0f2f5; }
+.top-item:last-child { border-bottom: none; }
+.top-rank { width: 22px; height: 22px; border-radius: 50%; background: #f0f2f5;
+  display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: #99a; flex-shrink: 0; }
+.top-rank.gold   { background: #fef3c7; color: #d97706; }
+.top-rank.silver { background: #f1f5f9; color: #64748b; }
+.top-rank.bronze { background: #fef2e7; color: #c2703a; }
+.top-info { flex: 1; min-width: 0; }
+.top-name { font-size: 13px; color: #334; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top-val  { font-size: 11px; color: #99a; margin-top: 2px; }
+
+/* ── 弹窗 SQL 编辑 ── */
+.sql-edit-tip { font-size: 12px; color: #4a90e2; margin-top: 6px; display: flex;
+  align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+
+<!-- 顶部 Tab -->
+<div class="topbar">
+  <div class="topbar-title">B站数据 AI 分析助手 <span>Text-to-SQL · 智能可视化</span></div>
+  <div class="tab active" onclick="showTab('chat',this)">💬 AI 对话</div>
+  <div class="tab" onclick="showTab('dashboard',this)">📊 数据看板</div>
+  <div class="topbar-right">
+    <button class="topbar-btn" onclick="clearHistory()">清空对话</button>
+  </div>
+</div>
+
+<div class="body-wrap">
+
+  <!-- 历史侧边栏 -->
+  <div class="history-sidebar">
+    <div class="history-header">历史查询</div>
+    <div class="history-list">
+      <div class="history-divider">今天</div>
+      <div class="history-item active">
+        <div class="history-q">播放量最高的10个视频</div>
+        <div class="history-meta">刚刚 · 10条结果</div>
+      </div>
+      <div class="history-item" onclick="loadHistory(this)">
+        <div class="history-q">各分区平均播放量对比</div>
+        <div class="history-meta">10分钟前 · 图表</div>
+      </div>
+      <div class="history-item" onclick="loadHistory(this)">
+        <div class="history-q">点赞超过10万的视频</div>
+        <div class="history-meta">32分钟前 · 43条</div>
+      </div>
+      <div class="history-divider">昨天</div>
+      <div class="history-item" onclick="loadHistory(this)">
+        <div class="history-q">2025年投稿量最多的UP主</div>
+        <div class="history-meta">昨天 · 20条结果</div>
+      </div>
+      <div class="history-item" onclick="loadHistory(this)">
+        <div class="history-q">科技区播放量趋势分析</div>
+        <div class="history-meta">昨天 · 折线图</div>
+      </div>
+      <div class="history-item" onclick="loadHistory(this)">
+        <div class="history-q">哪个分区弹幕互动率最高</div>
+        <div class="history-meta">昨天 · 8条</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主内容区 -->
+  <div class="main-area">
+
+    <!-- ── 聊天页 ── -->
+    <div class="page active" id="page-chat">
+      <div class="suggestions">
+        <span style="font-size:12px;color:#99a;align-self:center;margin-right:4px;">快捷问题：</span>
+        <button class="sug-btn">播放量 Top10</button>
+        <button class="sug-btn">各分区平均播放量</button>
+        <button class="sug-btn">年份对比分析</button>
+        <button class="sug-btn">UP主排行</button>
+        <button class="sug-btn">高点赞视频</button>
+        <button class="sug-btn">弹幕最多的分区</button>
+      </div>
+
+      <div class="chat-box" id="chatBox">
+
+        <!-- AI 欢迎消息 -->
+        <div class="msg bot">
+          <div class="msg-label">AI 助手</div>
+          <div class="bubble-bot">
+            你好！我可以帮你分析 B 站视频数据。支持自然语言提问，我会自动生成 SQL 并解读结果。
+            <br/><br/>试试问我：「<span style="color:#4a90e2;cursor:pointer">播放量最高的10个视频是哪些？</span>」
+          </div>
+        </div>
+
+        <!-- 用户消息 -->
+        <div class="msg user">
+          <div class="msg-label">你</div>
+          <div class="bubble-user">播放量最高的10个视频是哪些？</div>
+        </div>
+
+        <!-- AI 回答（完整升级版） -->
+        <div class="msg bot">
+          <div class="msg-label">AI 助手</div>
+          <div class="bubble-bot">
+
+            <div style="font-size:14px;line-height:1.7;">
+              播放量最高的 10 个视频中，排名第一的是
+              <strong>「【回形针】为什么人类如此孤独」</strong>，播放量高达 <strong>4823 万</strong>，
+              科技区占据前 10 中的 6 席，是播放量最强的分区。
+            </div>
+
+            <!-- SQL 块升级版 -->
+            <div class="sql-wrap">
+              <div class="sql-header">
+                <div class="sql-header-left">▶ 生成的 SQL</div>
+                <div class="sql-actions">
+                  <button class="sql-btn sql-btn-edit" onclick="toggleEdit(this)">✏️ 编辑</button>
+                  <button class="sql-btn sql-btn-run" onclick="rerun(this)">▶ 重新执行</button>
+                </div>
+              </div>
+              <div class="sql-body" id="sqlBody" contenteditable="false">SELECT 标题, 作者, 分区, 播放量
+FROM HuiZong
+ORDER BY 播放量 DESC
+LIMIT 10;</div>
+            </div>
+            <div class="sql-edit-tip" id="editTip" style="display:none;">
+              💡 修改 SQL 后点击「重新执行」可以用自定义查询获取数据
+            </div>
+
+            <!-- 图表类型切换 -->
+            <div class="chart-wrap">
+              <div class="chart-type-row">
+                <span style="font-size:12px;color:#99a;align-self:center;margin-right:4px;">图表：</span>
+                <button class="ct-btn on" onclick="switchChart('bar',this)">柱状图</button>
+                <button class="ct-btn" onclick="switchChart('line',this)">折线图</button>
+                <button class="ct-btn" onclick="switchChart('pie',this)">饼图</button>
+                <button class="ct-btn" onclick="switchChart('none',this)">隐藏</button>
+              </div>
+              <div class="chart-el" id="mainChart"></div>
+            </div>
+
+            <!-- 数据表格升级版 -->
+            <div class="table-wrap">
+              <div class="table-toolbar">
+                <div class="table-toolbar-left">共 10 条数据</div>
+                <div class="table-toolbar-right">
+                  <button class="tbl-btn" onclick="copyMd()">📋 复制表格</button>
+                  <button class="tbl-btn">⬇️ 下载 CSV</button>
+                  <button class="tbl-btn">📸 保存图表</button>
+                </div>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>标题 <span class="sort-arrow">↕</span></th>
+                    <th>作者 <span class="sort-arrow">↕</span></th>
+                    <th>分区 <span class="sort-arrow">↕</span></th>
+                    <th>播放量 <span class="sort-arrow">↓</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr><td>1</td><td>【回形针】为什么人类如此孤独</td><td>回形针PaperClip</td><td>科技</td><td>48,230,000</td></tr>
+                  <tr><td>2</td><td>我在B站学会了修摩托车</td><td>稚晖君</td><td>科技</td><td>41,560,000</td></tr>
+                  <tr><td>3</td><td>【纪录片】宇宙的边界在哪里</td><td>星球研究所</td><td>纪录片</td><td>38,920,000</td></tr>
+                  <tr><td>4</td><td>一个人的武汉日记</td><td>B站用户</td><td>生活</td><td>35,410,000</td></tr>
+                  <tr><td>5</td><td>手工耿的奇葩发明大合集</td><td>手工耿</td><td>生活</td><td>32,080,000</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <!-- 追问建议 -->
+            <div class="followup-wrap">
+              <div class="followup-label">💡 你可能还想问</div>
+              <div class="followup-btns">
+                <button class="followup-btn">这10个视频的弹幕量对比如何？</button>
+                <button class="followup-btn">科技区所有视频的平均播放量？</button>
+                <button class="followup-btn">回形针频道还有哪些高播放视频？</button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      <div class="input-area">
+        <div class="input-row">
+          <input id="inputQ" type="text" placeholder="输入问题，如：哪个UP主总播放量最高？按 Enter 发送"
+            onkeydown="if(event.key==='Enter')sendDemo()"/>
+          <button onclick="sendDemo()">发送</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── 数据看板 ── -->
+    <div class="page" id="page-dashboard">
+      <div class="dashboard">
+        <div class="db-stats">
+          <div class="db-stat">
+            <span class="db-stat-icon">🎬</span>
+            <div class="db-stat-label">视频总数</div>
+            <div class="db-stat-val">20,483</div>
+            <div class="db-stat-sub">↑ 本月新增 1,203</div>
+          </div>
+          <div class="db-stat">
+            <span class="db-stat-icon">👁️</span>
+            <div class="db-stat-label">总播放量</div>
+            <div class="db-stat-val">82.4亿</div>
+            <div class="db-stat-sub">↑ 较上月 +12%</div>
+          </div>
+          <div class="db-stat">
+            <span class="db-stat-icon">👤</span>
+            <div class="db-stat-label">UP主数量</div>
+            <div class="db-stat-val">8,341</div>
+            <div class="db-stat-sub">活跃创作者</div>
+          </div>
+          <div class="db-stat">
+            <span class="db-stat-icon">📂</span>
+            <div class="db-stat-label">覆盖分区</div>
+            <div class="db-stat-val">24</div>
+            <div class="db-stat-sub">个内容分区</div>
+          </div>
+        </div>
+
+        <div class="db-charts">
+          <div class="db-card">
+            <div class="db-card-title">各分区播放量分布</div>
+            <div class="db-chart-el" id="dbChart1"></div>
+          </div>
+          <div class="db-card">
+            <div class="db-card-title">年份投稿趋势</div>
+            <div class="db-chart-el" id="dbChart2"></div>
+          </div>
+        </div>
+
+        <div class="db-top">
+          <div class="db-card">
+            <div class="db-card-title">🏆 播放量 Top UP主</div>
+            <div class="top-item"><div class="top-rank gold">1</div><div class="top-info"><div class="top-name">回形针PaperClip</div><div class="top-val">总播放 4.2亿</div></div></div>
+            <div class="top-item"><div class="top-rank silver">2</div><div class="top-info"><div class="top-name">稚晖君</div><div class="top-val">总播放 3.8亿</div></div></div>
+            <div class="top-item"><div class="top-rank bronze">3</div><div class="top-info"><div class="top-name">星球研究所</div><div class="top-val">总播放 3.1亿</div></div></div>
+            <div class="top-item"><div class="top-rank">4</div><div class="top-info"><div class="top-name">影视飓风</div><div class="top-val">总播放 2.9亿</div></div></div>
+            <div class="top-item"><div class="top-rank">5</div><div class="top-info"><div class="top-name">手工耿</div><div class="top-val">总播放 2.6亿</div></div></div>
+          </div>
+          <div class="db-card">
+            <div class="db-card-title">🔥 高互动分区排行</div>
+            <div class="top-item"><div class="top-rank gold">1</div><div class="top-info"><div class="top-name">科技</div><div class="top-val">弹幕互动率 8.3%</div></div></div>
+            <div class="top-item"><div class="top-rank silver">2</div><div class="top-info"><div class="top-name">游戏</div><div class="top-val">弹幕互动率 7.1%</div></div></div>
+            <div class="top-item"><div class="top-rank bronze">3</div><div class="top-info"><div class="top-name">番剧</div><div class="top-val">弹幕互动率 6.8%</div></div></div>
+            <div class="top-item"><div class="top-rank">4</div><div class="top-info"><div class="top-name">生活</div><div class="top-val">弹幕互动率 5.2%</div></div></div>
+            <div class="top-item"><div class="top-rank">5</div><div class="top-info"><div class="top-name">知识</div><div class="top-val">弹幕互动率 4.9%</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+var currentChart = null;
+var currentType = 'bar';
+
+var chartData = {
+  labels: ['回形针','稚晖君','星球研究所','影视飓风','手工耿','老番茄','朱一旦','大佬','何同学','林晨同学'],
+  values: [4823, 4156, 3892, 3541, 3208, 2980, 2741, 2503, 2318, 2187]
+};
+
+function initMainChart(type) {
+  if (!currentChart) {
+    currentChart = echarts.init(document.getElementById('mainChart'));
+  }
+  var opt;
+  if (type === 'bar') {
+    opt = {
+      tooltip: {trigger:'axis'},
+      grid: {left:'80px',right:'20px',top:'10px',bottom:'40px'},
+      xAxis: {type:'category', data: chartData.labels, axisLabel:{rotate:25,fontSize:11}},
+      yAxis: {type:'value', axisLabel:{formatter:function(v){return (v/10000)+'万';}}},
+      series: [{type:'bar', data:chartData.values,
+        itemStyle:{color:function(p){var c=['#4a90e2','#357abd','#5ba3f0','#6bb8ff'];return c[p.dataIndex%4];}},
+        label:{show:true,position:'top',formatter:function(p){return (p.value/10000).toFixed(0)+'万';},fontSize:10}}]
+    };
+  } else if (type === 'line') {
+    opt = {
+      tooltip:{trigger:'axis'},
+      grid:{left:'80px',right:'20px',top:'10px',bottom:'40px'},
+      xAxis:{type:'category',data:chartData.labels,axisLabel:{rotate:25,fontSize:11}},
+      yAxis:{type:'value',axisLabel:{formatter:function(v){return (v/10000)+'万';}}},
+      series:[{type:'line',data:chartData.values,smooth:true,
+        areaStyle:{opacity:.15},itemStyle:{color:'#4a90e2'},
+        label:{show:true,formatter:function(p){return (p.value/10000).toFixed(0)+'万';},fontSize:10}}]
+    };
+  } else if (type === 'pie') {
+    opt = {
+      tooltip:{trigger:'item',formatter:'{b}: {c} ({d}%)'},
+      legend:{bottom:0,type:'scroll'},
+      series:[{type:'pie',radius:['35%','65%'],top:'-20px',
+        data:chartData.labels.map(function(l,i){return {name:l,value:chartData.values[i]};}),
+        label:{fontSize:11}}]
+    };
+  }
+  currentChart.setOption(opt, true);
+}
+
+function switchChart(type, el) {
+  document.querySelectorAll('.ct-btn').forEach(function(b){b.classList.remove('on');});
+  el.classList.add('on');
+  var el2 = document.getElementById('mainChart');
+  if (type === 'none') { el2.style.display='none'; return; }
+  el2.style.display='block';
+  currentType = type;
+  initMainChart(type);
+}
+
+function toggleEdit(btn) {
+  var body = document.getElementById('sqlBody');
+  var tip  = document.getElementById('editTip');
+  var editing = body.contentEditable === 'true';
+  if (!editing) {
+    body.contentEditable = 'true';
+    body.classList.add('editable');
+    body.focus();
+    btn.textContent = '✅ 完成';
+    tip.style.display = 'flex';
+  } else {
+    body.contentEditable = 'false';
+    body.classList.remove('editable');
+    btn.textContent = '✏️ 编辑';
+    tip.style.display = 'none';
+  }
+}
+
+function rerun(btn) {
+  btn.textContent = '⏳ 执行中...';
+  setTimeout(function(){ btn.textContent = '▶ 重新执行'; }, 1200);
+}
+
+function copyMd() {
+  alert('已复制为 Markdown 表格格式');
+}
+
+function loadHistory(el) {
+  document.querySelectorAll('.history-item').forEach(function(i){i.classList.remove('active');});
+  el.classList.add('active');
+}
+
+function clearHistory() {
+  if (confirm('确认清空对话历史？')) {}
+}
+
+function sendDemo() {
+  var input = document.getElementById('inputQ');
+  if (!input.value.trim()) return;
+  input.value = '';
+}
+
+function showTab(id, el) {
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  el.classList.add('active');
+  document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
+  document.getElementById('page-' + id).classList.add('active');
+  if (id === 'dashboard') initDashboard();
+}
+
+var dbInited = false;
+function initDashboard() {
+  if (dbInited) return;
+  dbInited = true;
+  echarts.init(document.getElementById('dbChart1')).setOption({
+    tooltip:{},
+    grid:{left:'60px',right:'10px',top:'10px',bottom:'10px'},
+    xAxis:{type:'value',axisLabel:{formatter:function(v){return v+'亿';}}},
+    yAxis:{type:'category',data:['知识','生活','游戏','娱乐','科技'].reverse(),axisLabel:{fontSize:11}},
+    series:[{type:'bar',data:[8.2,12.4,18.6,15.3,24.1].reverse(),
+      itemStyle:{color:function(p){var c=['#4a90e2','#5ba3f0','#357abd','#6bb8ff','#1a6fc4'];return c[p.dataIndex];}},
+      label:{show:true,position:'right',formatter:'{c}亿',fontSize:11}}]
+  });
+  echarts.init(document.getElementById('dbChart2')).setOption({
+    tooltip:{trigger:'axis'},
+    xAxis:{type:'category',data:['2022','2023','2024','2025','2026'],axisLabel:{fontSize:11}},
+    yAxis:{type:'value',name:'投稿数'},
+    series:[{type:'line',data:[2840,3920,4510,5830,3380],smooth:true,
+      areaStyle:{opacity:.15},itemStyle:{color:'#4a90e2'},
+      label:{show:true,fontSize:10}}]
+  });
+}
+
+// 初始化主图表
+setTimeout(function(){ initMainChart('bar'); }, 100);
+</script>
+</body>
+</html>
